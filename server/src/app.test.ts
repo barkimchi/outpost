@@ -4,20 +4,24 @@ import type { AddressInfo } from 'node:net';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createApp } from './app.js';
+import { createApp, type CreateAppOptions } from './app.js';
 
 /**
- * Task 0 scaffold tests. Boots createApp() on an ephemeral port (never 4700, so this
+ * App-level scaffold tests. Boots createApp() on an ephemeral port (never 4700, so this
  * never collides with a running dev server or with anything else already on the
  * machine) and exercises it with real HTTP requests.
  *
  * webDistDir is always an isolated temp directory created per test, never the repo's
  * real web/dist. That keeps these tests deterministic whether or not `npm run build`
  * has run before `npm test`.
+ *
+ * `production` defaults to true here: these tests are about the static/SPA-fallback
+ * behavior spec section 6 step 6 scopes to "prod only", so they opt in explicitly rather
+ * than depending on ambient NODE_ENV (which `npm test` does not set).
  */
 
-async function listen(webDistDir?: string) {
-  const app = createApp({ webDistDir });
+async function listen(webDistDir?: string, options: Omit<CreateAppOptions, 'webDistDir'> = {}) {
+  const app = createApp({ webDistDir, production: true, ...options });
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const { port } = server.address() as AddressInfo;
@@ -77,12 +81,44 @@ test('platform prefixes are never swallowed by the SPA fallback, even once a bui
   try {
     for (const prefix of ['/github', '/google', '/glean', '/slack', '/_trainer']) {
       const res = await fetch(`http://127.0.0.1:${port}${prefix}/anything`);
-      // No routers exist yet in Task 0, so these must fall through to the JSON 404,
-      // never to the SPA's index.html, even though index.html exists in this test.
+      // No routers exist yet for the platform prefixes (Task 2), so these must fall
+      // through to the JSON 404, never to the SPA's index.html, even though index.html
+      // exists in this test.
       assert.equal(res.status, 404, `${prefix} should not be swallowed by the SPA fallback`);
       const contentType = res.headers.get('content-type') ?? '';
       assert.ok(contentType.includes('application/json'), `${prefix} should return JSON, not HTML`);
     }
+  } finally {
+    server.close();
+  }
+});
+
+test('platform prefixes are guarded case-insensitively', async () => {
+  const webDistDir = await emptyTempDir();
+  await fs.writeFile(path.join(webDistDir, 'index.html'), '<!doctype html><title>gym</title>');
+  const { server, port } = await listen(webDistDir);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/GitHub/user`);
+    assert.equal(res.status, 404);
+    const contentType = res.headers.get('content-type') ?? '';
+    assert.ok(contentType.includes('application/json'), '/GitHub/user should return JSON, not the SPA shell');
+  } finally {
+    server.close();
+  }
+});
+
+test('outside production, the static/SPA fallback is not mounted at all', async () => {
+  const webDistDir = await emptyTempDir();
+  await fs.writeFile(path.join(webDistDir, 'index.html'), '<!doctype html><title>gym</title>');
+  const { server, port } = await listen(webDistDir, { production: false });
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/some/client-side/route`);
+    // Regression check for the Task 0 review finding: under `tsx` in development, this
+    // used to return a stale 200 index.html instead of a 404, which made every
+    // not-yet-built route look like it worked.
+    assert.equal(res.status, 404);
+    const body = (await res.json()) as { error: string };
+    assert.equal(body.error, 'Not Found');
   } finally {
     server.close();
   }

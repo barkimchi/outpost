@@ -12,9 +12,9 @@
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web",
     "build": "npm run build -w shared && npm run build -w server && npm run build -w web",
-    "start": "node server/dist/index.js",
-    "typecheck": "tsc -b",
-    "test": "tsx --test 'server/src/**/*.test.ts'"
+    "start": "NODE_ENV=production node server/dist/index.js",
+    "typecheck": "tsc -b && tsc --noEmit -p web/tsconfig.node.json",
+    "test": "tsx --test '{shared,server}/src/**/*.test.ts'"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

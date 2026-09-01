@@ -3,8 +3,18 @@ import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-/** Default 4700, not 4600: a stray process has held 4600 on the dev machine for weeks. */
-export const PORT = Number(process.env.PORT ?? 4700);
+/**
+ * Single source of truth for the default port (docs/SPEC.md section 2). `PORT` env
+ * overrides it. `web/vite.config.ts` cannot import this value directly (it runs through
+ * Vite's own esbuild-based config loader, outside this package's build graph, and a
+ * fresh clone has no `server/dist` yet), so it keeps its own literal fallback in sync by
+ * reading `process.env.PORT` the same way. `config.test.ts` asserts the two literals
+ * match so a future port change cannot silently drift between the two files the way it
+ * did across this project's first three commits (4700 -> 4800 -> 4600).
+ */
+export const DEFAULT_PORT = 4600;
+
+export const PORT = Number(process.env.PORT ?? DEFAULT_PORT);
 
 export const VERSION = '0.0.0';
 
