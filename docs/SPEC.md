@@ -68,6 +68,20 @@ Train first, showcase second.
    repeated activations, (a) the concrete values differ and run 1's answer fails in run 2,
    AND (b) the position or identity of the correct answer varies. Part (b) is the one that
    is easy to pass by accident while still being broken.
+7b. **Every field in the scenario contract must have a PROVEN consumer.** This build has
+   now shipped the same defect three separate times, each silent because the default value
+   was empty or undefined so nothing ever failed:
+   - `attemptHint` was authored on all 7 scenarios and the event carrying it had no field
+     for it, so no consumer could ever read it.
+   - `engine.activeInterceptFault()` was implemented and unit-tested and never called from
+     the fault injector.
+   - `BuiltScenario.setup` was authored in the type and never invoked by `activateDef()`,
+     undetected from Task 3 to Task 6 because every prior scenario passed `setup: []`.
+   A producer with no consumer looks correct in review, passes typecheck, and passes tests
+   built from the same wrong assumption. So: when adding a field to `ScenarioDef`,
+   `BuiltScenario`, `Step`, `Fault`, or any trainer event, ship a test that fails if the
+   consumer stops reading it. Asserting that the field exists is not enough; assert the
+   observable behavior it is supposed to cause.
 8. **Never assert on the absence of a header.** Postman adds its own (`User-Agent`,
    `Accept`, `Postman-Token`, `Accept-Encoding`, `Connection`).
 9. **Attempt feedback always says why it didn't count.** "Right endpoint, still 401"
