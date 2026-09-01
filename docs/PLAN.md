@@ -1,4 +1,4 @@
-# Postman Gym — Implementation Plan
+# Postman Gym: Implementation Plan
 
 Spec: `docs/SPEC.md` (binding authority). Read the relevant spec sections before writing code.
 
@@ -24,7 +24,7 @@ These bind every task. A reviewer treats a violation as an Important finding.
 7. **Never assert on the absence of a request header.** Postman injects its own.
 8. **Middleware mount order** is exactly spec §6. Reordering is a defect.
 9. **TypeScript strict mode on.** `npm run typecheck` must pass at the end of every task.
-10. **Fixtures carry a `// source: <url>` comment**, or `// UNVERIFIED SHAPE — approximated
+10. **Fixtures carry a `// source: <url>` comment**, or `// UNVERIFIED SHAPE: approximated
     from <what>` when a real body could not be confirmed. Never claim byte-exactness you
     did not verify.
 11. **Every task ends with its verification commands actually run**, with real output
@@ -50,12 +50,12 @@ Create the workspace skeleton so every later task has somewhere to land.
 
 **Build:**
 - Root `package.json`: private, `"workspaces": ["shared","server","web"]`, scripts:
-  - `dev` — runs server (tsx watch) and web (vite) concurrently
+  - `dev`: runs server (tsx watch) and web (vite) concurrently
   - `dev:server`, `dev:web`
-  - `build` — `npm run build -w shared && npm run build -w server && npm run build -w web`
-  - `start` — `node server/dist/index.js` (serves `web/dist` on the same port)
-  - `typecheck` — `tsc -b` across workspaces
-  - `test` — node's built-in test runner (`node --test`) over `server/dist` tests, or
+  - `build`: `npm run build -w shared && npm run build -w server && npm run build -w web`
+  - `start`: `node server/dist/index.js` (serves `web/dist` on the same port)
+  - `typecheck`: `tsc -b` across workspaces
+  - `test`: node's built-in test runner (`node --test`) over `server/dist` tests, or
     `tsx --test 'server/src/**/*.test.ts'`. Pick one and be consistent forever.
 - `tsconfig.base.json` with `strict: true`, `moduleResolution: "bundler"` for web and
   `"node16"`/`"nodenext"` for server as appropriate, `target: ES2022`.
@@ -282,10 +282,10 @@ Read spec §14 in full. This is learning-path Stage 9, which Bar asked for in v1
 initial plan deferred it.
 
 **Build:**
-- `web/src/scripts/worker.ts` — the sandboxed Web Worker (created from a Blob URL), the
+- `web/src/scripts/worker.ts`: the sandboxed Web Worker (created from a Blob URL), the
   `pm` shim per spec §14, `console.log` capture, and the `CryptoJS` global backed by the
   real `crypto-js` package. No DOM, no `fetch`, no network reachable from inside.
-- `web/src/scripts/run.ts` — main-thread driver: spawn a fresh worker per execution, post
+- `web/src/scripts/run.ts`: main-thread driver: spawn a fresh worker per execution, post
   `{script, context}`, enforce the **2000ms** timeout via `worker.terminate()`, return
   `{testResults, envPatch, consoleLines, error}`. A timed-out or throwing script surfaces
   as a failed run with the error text, never a hung UI.

@@ -1,4 +1,4 @@
-# Postman Gym — Technical Spec
+# Postman Gym: Technical Spec
 
 **Status:** binding authority. When the plan and this spec disagree, this spec wins.
 **Working name:** `postman-gym`. Postman is a trademark; rename before any public showcase.
@@ -25,7 +25,7 @@ Train first, showcase second.
    binds successfully and still loses all localhost traffic to it, which fails silently.
    If 4600 is ever occupied, use `PORT` and pick 4800, not 4700.)*
 2. **Listen on `0.0.0.0`.** Document `127.0.0.1` as the fallback base URL for
-   IPv6-first resolution. Postman **desktop** only — the web client cannot reach localhost.
+   IPv6-first resolution. Postman **desktop** only. The web client cannot reach localhost.
 3. **No real credentials, ever.** No network egress to real GitHub/Google/Glean/Slack.
    All tokens are generated fakes. No cloud, no telemetry.
 4. **Raw body is captured before JSON parsing.** Slack HMAC verification is over the
@@ -146,7 +146,7 @@ Mount order is load-bearing. Any reordering is a defect.
                     + express.urlencoded({ extended:true, verify: same })
                     + express.text({ type:['text/*','application/xml'], ... })
 2. requestLog       wraps res.write/res.end; on finish builds a RequestEvent
-                    { id, ts, method, path, query, reqHeaders (redacted values kept —
+                    { id, ts, method, path, query, reqHeaders (redacted values kept,
                       this is a training tool, secrets are fake), reqBody (utf8, capped 8KB),
                       status, resHeaders, resBody (capped 8KB), durationMs, platform }
                     -> bus.emit('request', ev)
@@ -188,7 +188,7 @@ Fixtures live in `platforms/*/fixtures.ts` as functions of the run context. Each
 `// source: <url> (verified <date>)` comment. The **envelope and wording stay verbatim**;
 only interpolated values (usernames, scopes, ids, timestamps) vary. Where a real body could
 not be verified against public docs, the comment must say
-`// UNVERIFIED SHAPE — approximated from <what>` so nobody claims byte-exactness it lacks.
+`// UNVERIFIED SHAPE: approximated from <what>` so nobody claims byte-exactness it lacks.
 
 `clearFaults: string[]` on a Step removes those fault ids when the step completes. This is
 how multi-step scenarios (the capstone) stage their breakage.
@@ -330,7 +330,7 @@ and step *count* are exposed. `drill: true` on the event tells the UI to hide th
 | GET | `/_trainer/oauth/callback` | `code`/`error` | HTML that `postMessage`s to the opener |
 
 **Proxy** rules: only `http://127.0.0.1:<PORT>`, `http://localhost:<PORT>`, and
-`http://0.0.0.0:<PORT>` targets are permitted (reject anything else with 400 — this keeps
+`http://0.0.0.0:<PORT>` targets are permitted (reject anything else with 400, which keeps
 a training tool from becoming an open SSRF relay). It forwards method/headers/body via
 `undici.request`, follows no redirects, and returns the response verbatim. Proxied
 requests re-enter the server as genuine HTTP, so `requestLog` sees them exactly like
@@ -368,52 +368,52 @@ The riskiest module. Requirements:
 
 Ids are stable. `#` = order in the registry.
 
-**Tier 1 — warm-ups (`t1-warmups.ts`)**
-1. `t1-wrong-method` — POST to a GET-only endpoint → 405 + `Allow` header.
-2. `t1-pagination` — read `per_page`/`page` from docs, fetch a specific page.
-3. `t1-content-type` — JSON body sent without `Content-Type: application/json` → 400.
+**Tier 1: warm-ups (`t1-warmups.ts`)**
+1. `t1-wrong-method`: POST to a GET-only endpoint → 405 + `Allow` header.
+2. `t1-pagination`: read `per_page`/`page` from docs, fetch a specific page.
+3. `t1-content-type`: JSON body sent without `Content-Type: application/json` → 400.
 
-**Tier 2 — GitHub (`t2-github.ts`)**
-4. `t2-revoked-pat` — 401 `Bad credentials`; fix by using the run's valid PAT.
-5. `t2-missing-scope` — 403; diagnose via `X-OAuth-Scopes` vs `X-Accepted-OAuth-Scopes`.
-6. `t2-private-404` — private repo returns **404 not 403** (GitHub's privacy behavior);
+**Tier 2: GitHub (`t2-github.ts`)**
+4. `t2-revoked-pat`: 401 `Bad credentials`; fix by using the run's valid PAT.
+5. `t2-missing-scope`: 403; diagnose via `X-OAuth-Scopes` vs `X-Accepted-OAuth-Scopes`.
+6. `t2-private-404`: private repo returns **404 not 403** (GitHub's privacy behavior);
    the lesson is that 404 can mean "no permission".
-7. `t2-rate-limit` — 403 + `x-ratelimit-remaining: 0`; read `x-ratelimit-reset`, switch
+7. `t2-rate-limit`: 403 + `x-ratelimit-remaining: 0`; read `x-ratelimit-reset`, switch
    to the second PAT.
 
-**Tier 3 — Google OAuth (`t3-google.ts`)**
-8. `t3-redirect-mismatch` — wrong callback URL in the OAuth helper.
-9. `t3-token-expiry` — 15s access-token TTL; token dies mid-exercise → refresh grant.
-10. `t3-revoked-refresh` — server revokes the refresh token → `invalid_grant` → full
+**Tier 3: Google OAuth (`t3-google.ts`)**
+8. `t3-redirect-mismatch`: wrong callback URL in the OAuth helper.
+9. `t3-token-expiry`: 15s access-token TTL; token dies mid-exercise → refresh grant.
+10. `t3-revoked-refresh`: server revokes the refresh token → `invalid_grant` → full
     re-consent.
-11. `t3-insufficient-scope` — `calendar.readonly` missing → `ACCESS_TOKEN_SCOPE_INSUFFICIENT`
+11. `t3-insufficient-scope`: `calendar.readonly` missing → `ACCESS_TOKEN_SCOPE_INSUFFICIENT`
     → re-consent with the added scope.
 
-**Tier 4 — Glean (`t4-glean.ts`)**
-12. `t4-token-type` — indexing token used against the search API → 401. The distinction
+**Tier 4: Glean (`t4-glean.ts`)**
+12. `t4-token-type`: indexing token used against the search API → 401. The distinction
     between client and indexing tokens is the lesson.
-13. `t4-malformed-body` — search body missing a required field → 400 validation error,
+13. `t4-malformed-body`: search body missing a required field → 400 validation error,
     solved by reading the Docs tab.
 
-**Tier 5 — Slack (`t5-slack.ts`)**
-14. `t5-envelope-trap` — `chat.postMessage` returns **HTTP 200** with
+**Tier 5: Slack (`t5-slack.ts`)**
+14. `t5-envelope-trap`: `chat.postMessage` returns **HTTP 200** with
     `{"ok":false,"error":"not_in_channel"}`; fix by `conversations.join`, then page
     `conversations.history` with a cursor.
-15. `t5-hmac-signature` — webhook `v0=` HMAC fails after the signing secret rotates;
+15. `t5-hmac-signature`: webhook `v0=` HMAC fails after the signing secret rotates;
     includes the 5-minute timestamp replay guard. A Postman pre-request script rep.
 
-**Tier 6 — capstone (`t6-capstone.ts`)**
-16. `t6-capstone` — 5 steps: consent + code exchange → prove access via userinfo →
+**Tier 6: capstone (`t6-capstone.ts`)**
+16. `t6-capstone`: 5 steps: consent + code exchange → prove access via userinfo →
     server revokes the refresh token mid-flight → diagnose `invalid_grant` and re-auth →
     successful Glean indexing call. This is the recordable Ryan demo.
 
 **Implementation track (`impl-track.ts`, `track:'implementation'`, no faults).**
 Greenfield go-live reps framed as new-customer onboarding, solved purely by reading Docs:
-- `impl-github` — build env + auth from docs, verify org access, paginate all repos.
-- `impl-oauth` — configure the OAuth helper from docs, consent, exchange, call userinfo.
-- `impl-glean` — obtain an indexing token, index the generated documents, verify they
+- `impl-github`: build env + auth from docs, verify org access, paginate all repos.
+- `impl-oauth`: configure the OAuth helper from docs, consent, exchange, call userinfo.
+- `impl-glean`: obtain an indexing token, index the generated documents, verify they
   come back from search.
-- `impl-slack` — join a channel, post a message, page through history.
+- `impl-slack`: join a channel, post a message, page through history.
 
 ## 13. Frontend
 
