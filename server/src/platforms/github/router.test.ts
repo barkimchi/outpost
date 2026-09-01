@@ -188,6 +188,73 @@ test('a private repo returns 404, not 403, to a token lacking the repo scope', a
   }
 });
 
+test('a private repo is filtered out of /user/repos for a token lacking the repo scope', async () => {
+  const ctx = buildTestRunContext({
+    github: { ...buildTestRunContext().github, scopes: ['read:org'] }, // deliberately missing "repo"
+  });
+  resetState(ctx);
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/github/user/repos`, {
+      headers: { authorization: `token ${ctx.github.validPat}` },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as Array<{ name: string; private: boolean }>;
+    assert.ok(
+      body.every((r) => !r.private),
+      'no private repo may appear in the list for a token missing the repo scope',
+    );
+    assert.ok(
+      !body.some((r) => r.name === ctx.github.privateRepo),
+      'the private repo the direct-access test 404s on must not leak into the list either',
+    );
+    const publicCount = ctx.github.repos.filter((r) => !r.private).length;
+    assert.equal(body.length, publicCount);
+  } finally {
+    server.close();
+  }
+});
+
+test('a private repo is filtered out of /orgs/:org/repos for a token lacking the repo scope', async () => {
+  const ctx = buildTestRunContext({
+    github: { ...buildTestRunContext().github, scopes: ['read:org'] }, // has read:org, missing repo
+  });
+  resetState(ctx);
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/github/orgs/${ctx.github.org}/repos`, {
+      headers: { authorization: `token ${ctx.github.validPat}` },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as Array<{ name: string; private: boolean }>;
+    assert.ok(body.every((r) => !r.private));
+    assert.ok(!body.some((r) => r.name === ctx.github.privateRepo));
+  } finally {
+    server.close();
+  }
+});
+
+test('a token with the repo scope still sees private repos in both list endpoints', async () => {
+  const ctx = buildTestRunContext(); // default fixture scopes include "repo"
+  resetState(ctx);
+  const { server, port } = await listen();
+  try {
+    const userRepos = await fetch(`http://127.0.0.1:${port}/github/user/repos`, {
+      headers: { authorization: `token ${ctx.github.validPat}` },
+    });
+    const userReposBody = (await userRepos.json()) as Array<{ name: string }>;
+    assert.ok(userReposBody.some((r) => r.name === ctx.github.privateRepo));
+
+    const orgRepos = await fetch(`http://127.0.0.1:${port}/github/orgs/${ctx.github.org}/repos`, {
+      headers: { authorization: `token ${ctx.github.validPat}` },
+    });
+    const orgReposBody = (await orgRepos.json()) as Array<{ name: string }>;
+    assert.ok(orgReposBody.some((r) => r.name === ctx.github.privateRepo));
+  } finally {
+    server.close();
+  }
+});
+
 test('a public repo is visible even without the repo scope', async () => {
   const ctx = buildTestRunContext({
     github: { ...buildTestRunContext().github, scopes: ['read:org'] },
@@ -239,6 +306,63 @@ test('missing read:org scope returns 403 with accurate X-OAuth-Scopes and X-Acce
     });
     assert.equal(res.headers.get('x-oauth-scopes'), 'repo');
     assert.equal(res.headers.get('x-accepted-oauth-scopes'), 'read:org');
+  } finally {
+    server.close();
+  }
+});
+
+test('a nonexistent org on /orgs/:org/repos returns the list-organization-repositories 404, not the get-a-repository one', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/github/orgs/some-other-org/repos`, {
+      headers: { authorization: `token ${ctx.github.validPat}` },
+    });
+    assert.equal(res.status, 404);
+    const body = await res.json();
+    assert.deepEqual(body, {
+      message: 'Not Found',
+      documentation_url: 'https://docs.github.com/rest/repos/repos#list-organization-repositories',
+      status: '404',
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('the Link header preserves extra query params, not just per_page and page', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/github/user/repos?per_page=2&page=1&type=all`, {
+      headers: { authorization: `token ${ctx.github.validPat}` },
+    });
+    assert.equal(res.status, 200);
+    const link = res.headers.get('link') ?? '';
+    assert.match(link, /type=all/, 'a query param other than per_page/page must survive into the Link URLs');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /rate_limit body has no stray "resource" key and includes graphql and search', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/github/rate_limit`, {
+      headers: { authorization: `token ${ctx.github.validPat}` },
+    });
+    const body = (await res.json()) as {
+      resources: { core: Record<string, unknown>; graphql: unknown; search: unknown };
+      rate: Record<string, unknown>;
+    };
+    assert.deepEqual(Object.keys(body.resources.core).sort(), ['limit', 'remaining', 'reset', 'used']);
+    assert.ok(body.resources.graphql, 'resources.graphql must be present');
+    assert.ok(body.resources.search, 'resources.search must be present');
+    assert.deepEqual(Object.keys(body.rate).sort(), ['limit', 'remaining', 'reset', 'used']);
   } finally {
     server.close();
   }

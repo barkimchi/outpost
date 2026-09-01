@@ -28,10 +28,13 @@ export function badCredentials(): GithubErrorBody {
   };
 }
 
-// source: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
-// (verified 2026-08-31). The message format ("API rate limit exceeded for user ID <id>.")
-// is GitHub's documented wording for an authenticated request; the documentation_url is
-// the rate-limiting anchor on that same page.
+// This body matches docs/PLAN.md's Task 2 brief verbatim (message format, documentation_url,
+// and status). Not independently reproduced live: doing so needs a real personal access
+// token that has actually exhausted its budget, and this project never holds real
+// credentials. The rate-limiting anchor at
+// https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting documents
+// the "API rate limit exceeded for user ID <id>." wording as GitHub's own, which is
+// corroborating evidence, not the origin of this exact fixture body.
 export function rateLimitExceeded(userId: number): GithubErrorBody {
   return {
     message: `API rate limit exceeded for user ID ${userId}.`,
@@ -40,11 +43,12 @@ export function rateLimitExceeded(userId: number): GithubErrorBody {
   };
 }
 
-// source: https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api
-// (verified 2026-08-31), cross-checked against multiple independent GitHub Community
-// Discussion threads quoting this exact body for personal access tokens missing a
-// required scope. Could not be reproduced live here without a genuine PAT lacking that
-// scope, since this project never holds real credentials.
+// This body matches docs/PLAN.md's Task 2 brief verbatim. Not independently reproduced
+// live: doing so needs a genuine personal access token missing a required scope, and this
+// project never holds real credentials. Cross-checked instead against GitHub's own
+// troubleshooting docs (https://docs.github.com/rest/using-the-rest-api/troubleshooting-the-rest-api)
+// and multiple independent GitHub Community Discussion threads quoting this exact
+// message, which corroborate the wording without being its origin.
 export function resourceNotAccessible(): GithubErrorBody {
   return {
     message: 'Resource not accessible by personal access token',
@@ -59,6 +63,18 @@ export function notFoundFixture(): GithubErrorBody {
   return {
     message: 'Not Found',
     documentation_url: 'https://docs.github.com/rest/repos/repos#get-a-repository',
+    status: '404',
+  };
+}
+
+// source: live GET https://api.github.com/orgs/this-org-does-not-exist-xyz123/repos
+// (verified 2026-08-31): returned exactly this body. Added in the Task 2 fix round: the
+// original build reused notFoundFixture() (the get-a-repository anchor) here, which is
+// the wrong endpoint's documentation_url for a nonexistent org.
+export function orgReposNotFound(): GithubErrorBody {
+  return {
+    message: 'Not Found',
+    documentation_url: 'https://docs.github.com/rest/repos/repos#list-organization-repositories',
     status: '404',
   };
 }

@@ -4,6 +4,7 @@ import {
   badCredentials,
   methodNotAllowedFixture,
   notFoundFixture,
+  orgReposNotFound,
   rateLimitExceeded,
   resourceNotAccessible,
 } from './fixtures.js';
@@ -39,6 +40,14 @@ test('notFoundFixture is byte-exact', () => {
   assert.deepEqual(notFoundFixture(), {
     message: 'Not Found',
     documentation_url: 'https://docs.github.com/rest/repos/repos#get-a-repository',
+    status: '404',
+  });
+});
+
+test('orgReposNotFound is byte-exact and uses the list-organization-repositories anchor', () => {
+  assert.deepEqual(orgReposNotFound(), {
+    message: 'Not Found',
+    documentation_url: 'https://docs.github.com/rest/repos/repos#list-organization-repositories',
     status: '404',
   });
 });

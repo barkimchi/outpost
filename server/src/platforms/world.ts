@@ -7,8 +7,8 @@ export type { World, GithubTokenRecord } from '@gym/shared';
  * "world.ts # World type + resetState() + activeWorld()"; hard constraint 5: "Every
  * mutable counter/token/secret lives in the World and is reset by resetState()").
  *
- * The `World` TYPE itself is declared in shared/src/scenario.ts, not here: see that
- * file's header comment for why (Fault.apply(w: World) is a shared type, and importing a
+ * The `World` TYPE itself is declared in shared/src/world.ts, not here: see that file's
+ * header comment for why (Fault.apply(w: World) is a shared type, and importing a
  * server-only type into shared would create a circular workspace dependency). This file
  * re-exports it, so anything importing "the World type" from platforms/world.ts, as spec
  * section 4's file tree names it, still finds it here, and owns the one thing that
@@ -39,6 +39,8 @@ export function resetState(ctx: RunContext): void {
       grantedScopes: [...ctx.google.grantedScopes],
       requestedScopes: [...ctx.google.requestedScopes],
       accessTokenTtlSec: ctx.google.accessTokenTtlSec,
+      // Empty until Task 6 builds the OAuth mock and issues real tokens into it.
+      issuedTokens: {},
     },
     glean: {
       instance: ctx.glean.instance,

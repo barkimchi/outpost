@@ -7,6 +7,7 @@ import {
   badCredentials,
   methodNotAllowedFixture,
   notFoundFixture,
+  orgReposNotFound,
   rateLimitExceeded,
   resourceNotAccessible,
 } from './fixtures.js';
@@ -19,12 +20,18 @@ import {
  * Two deliberate design decisions, made because RunContext and World do not model a
  * fine-grained-vs-classic PAT distinction or a per-repo access-control list:
  *
- * 1. Private-repo visibility (GET /repos/:owner/:repo) is gated on the token's "repo"
- *    scope, matching real classic-PAT behavior: without it, a private repo 404s rather
- *    than 403ing, exactly the "404 can mean no permission" lesson (spec section 12,
- *    scenario t2-private-404). `owner` is accepted but not validated against anything;
- *    RunContext models one org, not a multi-owner graph, and the ticket text always
- *    supplies the run's real org and repo names anyway.
+ * 1. Private-repo visibility is gated on the token's "repo" scope, matching real
+ *    classic-PAT behavior: GET /repos/:owner/:repo on a private repo 404s rather than
+ *    403ing without it, exactly the "404 can mean no permission" lesson (spec section 12,
+ *    scenario t2-private-404). The SAME gate applies to the two list endpoints
+ *    (/user/repos, /orgs/:org/repos) via `visibleRepos()` below: without "repo", private
+ *    repos are filtered out of the list entirely, not just blocked on direct access. A
+ *    Task 2 fix-round review caught the gap this closes: a token missing "repo" got a
+ *    correct 404 on the direct GET, but the same private repo still showed up (with
+ *    `"private": true`) in /user/repos, handing the learner both the answer and the
+ *    contradiction the scenario exists to teach. `owner` is accepted but not validated
+ *    against anything; RunContext models one org, not a multi-owner graph, and the ticket
+ *    text always supplies the run's real org and repo names anyway.
  * 2. The missing-scope 403 lesson (scenario t2-missing-scope) is modeled on
  *    GET /orgs/:org/repos requiring "read:org", a different endpoint than the
  *    private-repo lesson, so the two behaviors (404 vs 403) never contend for the same
@@ -112,18 +119,37 @@ function clampPage(raw: unknown): number {
 /**
  * Matches the real Link header's rel set and ordering, verified live against
  * api.github.com on 2026-08-31 (prev, next, last, first, each present only when it
- * points somewhere other than the current page).
+ * points somewhere other than the current page). Preserves every other query param the
+ * request carried (a Task 2 fix-round review caught this dropping everything but
+ * per_page/page, which would silently strip anything else a real client sent, e.g. a
+ * `type` or `sort` filter), overriding only `per_page` and `page` themselves.
  */
 function buildLinkHeader(req: Request, page: number, perPage: number, total: number): string | null {
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const base = `${req.protocol}://${req.get('host') ?? ''}${req.baseUrl}${req.path}`;
-  const urlFor = (p: number) => `${base}?per_page=${perPage}&page=${p}`;
+  const urlFor = (p: number) => {
+    const params = new URLSearchParams(req.query as Record<string, string>);
+    params.set('per_page', String(perPage));
+    params.set('page', String(p));
+    return `${base}?${params.toString()}`;
+  };
   const parts: string[] = [];
   if (page > 1) parts.push(`<${urlFor(page - 1)}>; rel="prev"`);
   if (page < totalPages) parts.push(`<${urlFor(page + 1)}>; rel="next"`);
   if (page < totalPages) parts.push(`<${urlFor(totalPages)}>; rel="last"`);
   if (page > 1) parts.push(`<${urlFor(1)}>; rel="first"`);
   return parts.length > 0 ? parts.join(', ') : null;
+}
+
+/**
+ * Filters out private repos for a token missing the "repo" scope (docs/SPEC.md section
+ * 12, scenario t2-private-404). Applied to both list endpoints so a token that gets a
+ * correct 404 on direct access never also sees the same repo in a list, which would hand
+ * the learner the answer and undercut the lesson in one response.
+ */
+function visibleRepos(repos: RepoRecord[], record: GithubTokenRecord): RepoRecord[] {
+  if (record.scopes.includes(PRIVATE_REPO_REQUIRED_SCOPE)) return repos;
+  return repos.filter((repo) => !repo.private);
 }
 
 interface RepoRecord {
@@ -148,6 +174,14 @@ function repoBody(repo: RepoRecord, org: string): Record<string, unknown> {
   };
 }
 
+/**
+ * Fires before authentication (docs/SPEC.md section 12, scenario t1-wrong-method: a
+ * warm-up about REST method semantics in general, not about auth). A Task 2 fix-round
+ * review noted this means an unauthenticated `DELETE /github/user` gets 405 here rather
+ * than the 401/404 real GitHub would give first; acceptable for that tier-1 lesson, since
+ * no scenario needs an unauthenticated wrong-method combination to behave any particular
+ * way, but noted here for anyone who goes looking for why the ordering differs.
+ */
 function methodNotAllowed(res: Response): void {
   res.set('Allow', 'GET');
   res.status(405).json(methodNotAllowedFixture());
@@ -187,7 +221,7 @@ export function createGithubRouter(): Router {
 
       const perPage = clampPerPage(req.query.per_page);
       const page = clampPage(req.query.page);
-      const repos = world.github.repos;
+      const repos = visibleRepos(world.github.repos, auth.record);
       const start = (page - 1) * perPage;
       const pageItems = repos.slice(start, start + perPage);
 
@@ -238,7 +272,7 @@ export function createGithubRouter(): Router {
       res.set('x-accepted-oauth-scopes', ORG_REPOS_REQUIRED_SCOPE);
 
       if (req.params.org !== world.github.org) {
-        res.status(404).json(notFoundFixture());
+        res.status(404).json(orgReposNotFound());
         return;
       }
 
@@ -252,7 +286,7 @@ export function createGithubRouter(): Router {
 
       const perPage = clampPerPage(req.query.per_page);
       const page = clampPage(req.query.page);
-      const repos = world.github.repos;
+      const repos = visibleRepos(world.github.repos, auth.record);
       const start = (page - 1) * perPage;
       const pageItems = repos.slice(start, start + perPage);
       const link = buildLinkHeader(req, page, perPage, repos.length);
@@ -272,9 +306,25 @@ export function createGithubRouter(): Router {
       // this endpoint reports the current record without charging it.
       applyStandardHeaders(res, auth.record, requestId);
       res.set('x-accepted-oauth-scopes', '');
+      // Body shape verified live against GET https://api.github.com/rate_limit
+      // (2026-08-31): each resource object is exactly {limit, remaining, reset, used},
+      // with no "resource" key inside it (that string is a header value only, applied
+      // above via x-ratelimit-resource, not part of the body). A Task 2 fix-round review
+      // caught both the stray key and the missing "search"/"graphql" resources; "search"
+      // and "graphql" are not budget-tracked by this mock (no scenario exercises them),
+      // so they are reported as static, always-fresh placeholders rather than wired to
+      // any real counter.
+      const core = {
+        limit: auth.record.rateLimit.limit,
+        remaining: auth.record.rateLimit.remaining,
+        reset: auth.record.rateLimit.reset,
+        used: auth.record.rateLimit.used,
+      };
+      const graphql = { limit: 0, remaining: 0, reset: auth.record.rateLimit.reset, used: 0 };
+      const search = { limit: 10, remaining: 10, reset: auth.record.rateLimit.reset, used: 0 };
       res.json({
-        resources: { core: { ...auth.record.rateLimit } },
-        rate: { ...auth.record.rateLimit },
+        resources: { core, graphql, search },
+        rate: core,
       });
     })
     .all((_req, res) => methodNotAllowed(res));
