@@ -412,15 +412,68 @@ Drill mode and Demo mode compose.
 **Postman clone** must cover: collections sidebar (folders + requests), environment
 select + editor, `{{var}}` resolution and highlighting, Params/Auth/Headers/Body tabs,
 Auth types (No Auth, Bearer, Basic, API Key, OAuth 2.0 helper modal), Body types (none,
-raw JSON, form-urlencoded), response panel (status pill, time, size, Pretty/Raw/Headers),
-and a `</> Code` export modal producing cURL / Python `requests` / Node axios.
+raw JSON, form-urlencoded), Pre-request and Tests script tabs (§14), response panel
+(status pill, time, size, Pretty/Raw/Headers, Test Results, Console), and a `</> Code`
+export modal producing cURL / Python `requests` / Node axios.
 
 **Explain-back:** on `scenario:explaining`, the reference panel prompts for a 2-3 sentence
 root cause and a short customer-facing reply. Submitting persists both, then reveals
 `solutionMd` side by side. Only then does the scenario finalize as solved. Works in Demo
 mode too.
 
-## 14. Verification discipline
+## 14. Script engine (learning-path Stage 9)
+
+In scope for v1. Postman runs scripts **in the client**, so this does too. It is a
+practice surface, not an assertion surface (see the dual-client rule below).
+
+**Execution:** a sandboxed **Web Worker** created from a Blob URL. No DOM, no `window`,
+no `fetch`, no network. The main thread posts `{script, context}` and receives
+`{testResults, envPatch, consoleLines, error}` via structured clone. Hard timeout of
+**2000ms** enforced by `worker.terminate()`; a timed-out script reports as a failed run,
+never a hung UI. A fresh worker per execution, so no state leaks between runs.
+
+**Two script slots per request**, persisted in `workspace.json` on the request object as
+`scripts: { preRequest: string, test: string }`:
+- **Pre-request** runs before the proxy call. Its `envPatch` is applied to the environment,
+  and the request is then resolved against the updated environment, so a script that
+  computes a signature or refreshes a token genuinely changes what goes over the wire.
+- **Tests** runs after the response arrives, with `pm.response` populated.
+
+**`pm` API surface (v1).** Deliberately small, matching what the learning path and the
+Slack HMAC rep need:
+```
+pm.test(name, fn)                     // registers; a throw inside fn = fail
+pm.expect(value)                      // .to.eql / .to.equal / .to.include / .to.be.ok
+                                      // .to.have.status(n) / .to.have.property(k)
+pm.response.code | .status | .responseTime | .json() | .text()
+pm.response.headers.get(name)         // case-insensitive
+pm.response.to.have.status(n)
+pm.request.method | .url | .headers | .body
+pm.environment.get(k) / .set(k,v) / .unset(k)
+pm.variables.get(k) / .set(k,v)
+pm.collectionVariables.get(k) / .set(k,v)
+console.log(...)                      // captured into consoleLines, shown in the Console
+```
+`pm.sendRequest` is **out of scope for v1** (it needs async plumbing through the worker
+and the proxy). Say so in the docs rather than stubbing it.
+
+**CryptoJS** is exposed as a global, backed by the real `crypto-js` package, because the
+canonical Slack signing snippet uses `CryptoJS.HmacSHA256(...).toString()` and WebCrypto's
+async `subtle.sign` cannot match that synchronous call shape. At minimum `HmacSHA256`,
+`SHA256`, and `enc.Hex` must work.
+
+**UI:** two more request-builder tabs, **Pre-request** and **Tests**, CodeMirror in
+JavaScript mode. The response panel gains a **Test Results** tab (pass/fail rows, green
+count badge on the tab) and a **Console** tab for `console.log` output. Tab badges show
+counts the way Postman's do.
+
+**Dual-client rule (load-bearing):** scenario assertions stay server-side and never depend
+on client test results, because real Postman's results are invisible to the server and
+parity between the two clients is the whole point. Scripts still affect server-visible
+behavior through the environment they mutate, which is the part that matters. No scenario
+may gate on `pm.test` outcomes.
+
+## 15. Verification discipline
 
 Every phase ships with curl commands that prove it. A phase is not done until its checks
 run green in a real shell and the output is pasted into the report. "Looks right" is not

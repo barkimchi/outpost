@@ -258,12 +258,63 @@ request), environments (create/select/edit, `{{var}}` resolution and highlightin
 URL and body), Auth tab (No Auth, Bearer, Basic, API Key, OAuth 2.0 helper), Body tab
 (none, raw JSON, form-urlencoded), Params tab, Headers tab, `</> Code` export modal
 (cURL, Python `requests`, Node axios), persistence to `data/workspace.json` via
+
 `GET/PUT /_trainer/api/workspace`, the Docs tab wired to `/_trainer/api/docs`, and a Notes
 tab (CodeMirror, persisted).
+
+**Note for the implementer:** Task 9 adds two more request-builder tabs (Pre-request,
+Tests) and two more response-panel tabs (Test Results, Console), plus a `scripts` field on
+the persisted request object. Build the tab strips and the request/workspace types so that
+adding those is an extension, not a rewrite. Do not build the script engine yourself.
 
 **Verify:** build a collection with an environment, restart the server, confirm everything
 persists. Export a request as cURL and run the output verbatim in a shell; it must produce
 the same response.
+
+---
+
+## Task 9: Script engine
+
+**Runs immediately after Task 5, before Task 6.** The number is 9 only because the brief
+extractor keys off `## Task <N>` and renumbering would invalidate the existing briefs.
+
+Read spec §14 in full. This is learning-path Stage 9, which Bar asked for in v1 after the
+initial plan deferred it.
+
+**Build:**
+- `web/src/scripts/worker.ts` — the sandboxed Web Worker (created from a Blob URL), the
+  `pm` shim per spec §14, `console.log` capture, and the `CryptoJS` global backed by the
+  real `crypto-js` package. No DOM, no `fetch`, no network reachable from inside.
+- `web/src/scripts/run.ts` — main-thread driver: spawn a fresh worker per execution, post
+  `{script, context}`, enforce the **2000ms** timeout via `worker.terminate()`, return
+  `{testResults, envPatch, consoleLines, error}`. A timed-out or throwing script surfaces
+  as a failed run with the error text, never a hung UI.
+- Wire into the send pipeline: **pre-request script → apply `envPatch` → resolve
+  `{{vars}}` → proxy call → response → tests script**. The ordering matters: a
+  pre-request script that computes a signature or sets a token must affect the request
+  that actually goes over the wire.
+- Persist `scripts: {preRequest, test}` per request in `workspace.json`.
+- UI: **Pre-request** and **Tests** request-builder tabs (CodeMirror, JavaScript mode);
+  **Test Results** and **Console** tabs in the response panel, with count badges on the
+  tab labels the way Postman does it.
+- Docs: a `content/docs/scripting.md` page covering the `pm` surface, the Slack signing
+  snippet, and an explicit note that `pm.sendRequest` is not implemented in v1.
+
+**Do not** let any scenario assertion depend on test results. Assertions stay server-side
+(spec §14, dual-client rule). Scripts influence the server only through the environment
+they mutate, and that is intentional.
+
+**Verify (run these, paste output):**
+- A `pm.test("status is 200", () => pm.response.to.have.status(200))` on a live request
+  shows one green row.
+- A deliberately failing test shows a red row with the assertion message, and does not
+  break the response panel.
+- A pre-request script doing `pm.environment.set("sig", CryptoJS.HmacSHA256("v0:1:{}", "secret").toString())`
+  puts a value into the environment that the outgoing request then carries. Prove it by
+  checking the Logs tab shows the resolved header, not the literal `{{sig}}`.
+- `while(true){}` in a script terminates at ~2s with an error row and leaves the UI
+  responsive.
+- A script attempting `fetch(...)` fails with a clear error rather than reaching the network.
 
 ---
 
@@ -297,6 +348,12 @@ errors, indexing endpoints) and `platforms/slack/*` (the `{"ok":false,"error":".
 envelope inside HTTP 200, cursor pagination on `conversations.history`,
 `conversations.join`, and `sign.ts` implementing Slack's `v0=` HMAC-SHA256 over
 `v0:{timestamp}:{rawBody}` with the 5-minute replay window). Scenarios 12-15.
+
+Scenario `t5-hmac-signature` is a genuine **pre-request script** rep: Task 9 shipped the
+script engine, so the trainee computes the signature in a Pre-request script with
+`CryptoJS.HmacSHA256`, exactly as they would in real Postman. The docs page must ALSO
+give the `openssl dgst` one-liner as the out-of-band alternative, since that is how you
+verify the endpoint by hand and how the rep works from a bare terminal.
 
 Fetch Glean's and Slack's public API docs to get the error shapes right. Where a body
 cannot be verified, mark it `// UNVERIFIED SHAPE`.
