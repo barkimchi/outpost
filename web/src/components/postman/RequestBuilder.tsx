@@ -112,18 +112,21 @@ function HeadersTab(): React.JSX.Element {
   );
 }
 
-/** Task 9 (spec section 14) fills these in with real execution. This task builds the
- *  persisted text and the tab strip slot only, so Task 9 is an extension, not a rewrite. */
-function ScriptPlaceholderTab({ value, onChange, kind }: { value: string; onChange: (v: string) => void; kind: 'preRequest' | 'test' }): React.JSX.Element {
+/** Pre-request and Tests tabs (docs/SPEC.md section 14): CodeMirror in JavaScript mode,
+ *  executed by `scripts/run.ts`'s sandboxed worker on Send. Pre-request runs before the
+ *  proxy call and its `envPatch` is applied before `{{vars}}` resolve; Tests runs after
+ *  the response arrives with `pm.response` populated. Results land in the response panel's
+ *  Test Results and Console tabs, not here. */
+function ScriptTab({ value, onChange, kind }: { value: string; onChange: (v: string) => void; kind: 'preRequest' | 'test' }): React.JSX.Element {
   return (
     <div className="flex h-full flex-col p-3">
       <p className="mb-2 shrink-0 rounded-md border border-gym-border bg-gym-panel2/60 px-2.5 py-1.5 text-[11px] leading-relaxed text-gym-text-faint">
         {kind === 'preRequest'
-          ? 'Runs before the request is sent, once the script engine lands. Saved here for now.'
-          : 'Runs after the response arrives, once the script engine lands. Saved here for now.'}
+          ? 'Runs before the request is sent. pm.environment.set/unset here changes what {{vars}} resolve to for this send. No fetch, no network: pm.sendRequest is not implemented.'
+          : 'Runs after the response arrives, with pm.response populated. pm.test(name, fn) rows show up in Test Results; console.log output shows up in Console.'}
       </p>
       <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-gym-border bg-gym-panel2">
-        <CodeMirrorBox value={value} onChange={onChange} language="none" className="h-full" />
+        <CodeMirrorBox value={value} onChange={onChange} language="javascript" className="h-full" />
       </div>
     </div>
   );
@@ -247,6 +250,8 @@ export function RequestBuilder(): React.JSX.Element {
             {t.id === 'headers' && <TabBadge count={headerCount} />}
             {t.id === 'auth' && request.auth.type !== 'none' && <span className="h-1.5 w-1.5 rounded-full bg-gym-accent" />}
             {t.id === 'body' && request.bodyMode !== 'none' && <span className="h-1.5 w-1.5 rounded-full bg-gym-accent" />}
+            {t.id === 'prerequest' && request.scripts.preRequest.trim() !== '' && <span className="h-1.5 w-1.5 rounded-full bg-gym-accent" />}
+            {t.id === 'tests' && request.scripts.test.trim() !== '' && <span className="h-1.5 w-1.5 rounded-full bg-gym-accent" />}
           </button>
         ))}
       </div>
@@ -256,8 +261,8 @@ export function RequestBuilder(): React.JSX.Element {
         {activeRequestTab === 'auth' && <AuthTab />}
         {activeRequestTab === 'headers' && <HeadersTab />}
         {activeRequestTab === 'body' && <BodyTab />}
-        {activeRequestTab === 'prerequest' && <ScriptPlaceholderTab value={request.scripts.preRequest} onChange={setScriptPreRequest} kind="preRequest" />}
-        {activeRequestTab === 'tests' && <ScriptPlaceholderTab value={request.scripts.test} onChange={setScriptTest} kind="test" />}
+        {activeRequestTab === 'prerequest' && <ScriptTab value={request.scripts.preRequest} onChange={setScriptPreRequest} kind="preRequest" />}
+        {activeRequestTab === 'tests' && <ScriptTab value={request.scripts.test} onChange={setScriptTest} kind="test" />}
       </div>
 
       {codeExportOpen && <CodeExportModal onClose={() => setCodeExportOpen(false)} />}

@@ -12,17 +12,68 @@ const TABS: Array<{ id: ResponseViewMode; label: string }> = [
   { id: 'console', label: 'Console' },
 ];
 
-/** Task 9 (spec section 14) wires these to the script engine's `testResults`/
- *  `consoleLines`. This task builds the tab slot only, so that wiring is an extension. */
-function ScriptResultPlaceholder({ kind }: { kind: 'test-results' | 'console' }): React.JSX.Element {
+/** Test Results tab (docs/SPEC.md section 14): one row per `pm.test(name, fn)` call from
+ *  the request's Tests script, green check for a pass, red cross plus the assertion
+ *  message for a fail. A script-level failure (a syntax error, or a throw outside any
+ *  `pm.test`) is represented the same way, as its own named row (`state/store.ts`'s
+ *  `sendRequest` pushes "Pre-request script"/"Tests script" rows for that), so a broken
+ *  script is always visible here and never silently swallowed. */
+function TestResultsView(): React.JSX.Element {
+  const testResults = useStore((s) => s.testResults);
+
+  if (testResults.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-gym-text-faint">No tests ran</span>
+        <p className="max-w-xs text-xs leading-relaxed text-gym-text-dim">
+          Write a pm.test(...) call in the Tests tab, then Send. Pass/fail rows land here.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center">
-      <span className="font-mono text-[10px] uppercase tracking-widest text-gym-text-faint">No scripts run yet</span>
-      <p className="max-w-xs text-xs leading-relaxed text-gym-text-dim">
-        {kind === 'test-results'
-          ? 'Pass/fail rows from the Tests tab script land here once the script engine lands.'
-          : 'console.log output from Pre-request and Tests scripts lands here once the script engine lands.'}
-      </p>
+    <div className="space-y-1.5">
+      {testResults.map((t, i) => (
+        <div
+          key={`${t.name}-${i}`}
+          className={`rounded-md border px-2.5 py-1.5 text-xs ${
+            t.passed ? 'border-gym-green-dim bg-gym-green-dim/20' : 'border-gym-red-dim bg-gym-red-dim/20'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className={`font-mono text-[10px] font-bold ${t.passed ? 'text-gym-green' : 'text-gym-red'}`}>{t.passed ? 'PASS' : 'FAIL'}</span>
+            <span className="text-gym-text">{t.name}</span>
+          </div>
+          {t.error && <p className="mt-1 font-mono text-[11px] text-gym-red">{t.error}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Console tab (docs/SPEC.md section 14): combined `console.log`/`.warn`/`.error`/`.info`
+ *  output from both scripts on the most recent send, in call order (Pre-request's lines
+ *  first, then Tests'). */
+function ConsoleView(): React.JSX.Element {
+  const consoleLines = useStore((s) => s.consoleLines);
+
+  if (consoleLines.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-gym-text-faint">Nothing logged</span>
+        <p className="max-w-xs text-xs leading-relaxed text-gym-text-dim">console.log(...) output from Pre-request and Tests scripts lands here.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1 font-mono text-xs text-gym-text-dim">
+      {consoleLines.map((line, i) => (
+        <div key={i} className="whitespace-pre-wrap break-all border-b border-gym-border/40 pb-1 last:border-0">
+          {line}
+        </div>
+      ))}
     </div>
   );
 }
@@ -55,6 +106,31 @@ function AttemptFeedback(): React.JSX.Element | null {
   );
 }
 
+/** Postman-style count badge on the Test Results tab: `passed/total`, colored green when
+ *  everything passed and red when at least one row failed. Hidden until at least one test
+ *  has run, matching the Params/Headers tab badges' own "hidden at zero" convention. */
+function TestResultsBadge(): React.JSX.Element | null {
+  const testResults = useStore((s) => s.testResults);
+  if (testResults.length === 0) return null;
+  const passed = testResults.filter((t) => t.passed).length;
+  const allPassed = passed === testResults.length;
+  return (
+    <span
+      className={`rounded-full px-1.5 py-0.5 font-mono text-[9px] font-semibold ${
+        allPassed ? 'bg-gym-green-dim text-gym-green' : 'bg-gym-red-dim text-gym-red'
+      }`}
+    >
+      {passed}/{testResults.length}
+    </span>
+  );
+}
+
+function ConsoleBadge(): React.JSX.Element | null {
+  const count = useStore((s) => s.consoleLines.length);
+  if (count === 0) return null;
+  return <span className="rounded-full bg-gym-panel3 px-1.5 py-0.5 font-mono text-[9px] text-gym-text-faint">{count}</span>;
+}
+
 function ResponseTabs(): React.JSX.Element {
   const mode = useStore((s) => s.ui.responseViewMode);
   const setResponseViewMode = useStore((s) => s.setResponseViewMode);
@@ -65,11 +141,13 @@ function ResponseTabs(): React.JSX.Element {
           key={t.id}
           type="button"
           onClick={() => setResponseViewMode(t.id)}
-          className={`rounded-t-md px-3 py-1.5 text-xs font-medium transition-colors ${
+          className={`flex items-center gap-1.5 rounded-t-md px-3 py-1.5 text-xs font-medium transition-colors ${
             mode === t.id ? 'bg-gym-panel2 text-gym-text' : 'text-gym-text-faint hover:text-gym-text-dim'
           }`}
         >
           {t.label}
+          {t.id === 'test-results' && <TestResultsBadge />}
+          {t.id === 'console' && <ConsoleBadge />}
         </button>
       ))}
     </div>
@@ -118,8 +196,10 @@ export function ResponsePanel(): React.JSX.Element {
                   ))}
                 </tbody>
               </table>
-            ) : mode === 'test-results' || mode === 'console' ? (
-              <ScriptResultPlaceholder kind={mode} />
+            ) : mode === 'test-results' ? (
+              <TestResultsView />
+            ) : mode === 'console' ? (
+              <ConsoleView />
             ) : (
               <CodeMirrorBox
                 value={mode === 'pretty' ? tryPrettyJson(response.body).pretty : response.body}
