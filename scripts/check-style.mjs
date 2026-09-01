@@ -1,21 +1,40 @@
 #!/usr/bin/env node
-// Style guard (docs/PLAN.md Task 2, hardened in the Task 2 fix round). Dependency-free
-// grep over tracked source files for:
+// Style guard (docs/PLAN.md Task 2, hardened across two fix rounds). Dependency-free grep
+// over tracked source files for:
 //   1. em-dash/en-dash and three common lookalikes (figure dash, horizontal bar, minus
-//      sign) in any of the raw glyph, a JS/TS \u escape sequence, an HTML entity (named
-//      or numeric), or a String.fromCharCode/fromCodePoint construction with a literal
-//      code point argument, outside docs/reference/** and package-lock.json. A first
-//      version of this script only caught the raw glyph in five text extensions; a
-//      review defeated it with all four bypass forms plus two extensions (.html, .css)
-//      it never scanned at all, which happen to be exactly where UI copy lives.
+//      sign), outside docs/reference/** and package-lock.json.
 //   2. no reintroduction of the literal banned port outside docs/SPEC.md.
+//
+// WHAT THE DASH CHECK CATCHES, AND WHAT IT DOES NOT (read this before trusting it):
+// It catches four forms per banned code point: the raw glyph, a JS/TS \u escape
+// sequence, an HTML entity (named or numeric, decimal or hex), and a
+// String.fromCharCode/fromCodePoint call with the code point written as a literal
+// decimal or hex argument. It does NOT catch computed construction: an arithmetic
+// expression that evaluates to a banned code point (String.fromCharCode(8_212),
+// String.fromCharCode(8212 + 0), String.fromCharCode(4106 * 2), and infinitely many
+// other equivalents) will pass clean. A static grep cannot evaluate arbitrary
+// expressions, so this gap is permanent, not a bug to chase; it was raised and
+// deliberately accepted in the Task 2 fix round rather than left silently believed
+// airtight. Treat this script as a floor, not a guarantee: it catches copy-paste and the
+// obvious bypasses, not a determined adversary.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'data', '.superpowers']);
-const CHECKED_EXTENSIONS = new Set(['.ts', '.tsx', '.md', '.json', '.mjs', '.html', '.css']);
+const CHECKED_EXTENSIONS = new Set([
+  '.ts',
+  '.tsx',
+  '.md',
+  '.json',
+  '.mjs',
+  '.cjs',
+  '.js',
+  '.jsx',
+  '.html',
+  '.css',
+]);
 const DASH_EXCLUDE_PREFIX = 'docs/reference/';
 const DASH_EXCLUDE_FILE = 'package-lock.json';
 const PORT_ALLOWED_FILE = 'docs/SPEC.md';
