@@ -398,6 +398,92 @@ describe('store: stale-response race guard', () => {
     expect(useStore.getState().scenario.scenarioId).toBe('t1-wrong-method');
     expect(useStore.getState().scenario.state).toBe('active');
   });
+
+  it('a Drill click during init()\'s health() round trip still beats init()\'s later getState()', async () => {
+    // Fix round: the epoch used to be claimed only right before getState(), after already
+    // awaiting health(). That left a window: a click landing during the health() round
+    // trip took an epoch NEWER than the one init() had not claimed yet, but init()'s own
+    // later getState() call would still claim a newer epoch than that click's, once init()
+    // finally got around to bumping it, so init() won anyway. The epoch is now claimed as
+    // init()'s very first synchronous step, before any await, closing that window.
+    let resolveHealth: (value: { ok: true; version: string; port: number }) => void = () => {};
+    const pendingHealth = new Promise<{ ok: true; version: string; port: number }>((resolve) => {
+      resolveHealth = resolve;
+    });
+    mocked.health.mockReturnValue(pendingHealth);
+    mocked.getState.mockResolvedValue({ state: 'idle' });
+    mocked.listScenarios.mockResolvedValue([]);
+    mocked.activateDrill.mockResolvedValue(activatedPayload({ scenarioId: 't2-missing-scope', drill: true }));
+
+    const initPromise = useStore.getState().init();
+    // init() is now blocked on health(); a Drill click starts and finishes here, entirely
+    // inside that window.
+    await useStore.getState().activateDrill(2);
+    expect(useStore.getState().scenario.scenarioId).toBe('t2-missing-scope');
+
+    resolveHealth({ ok: true, version: '0.0.0', port: 4600 });
+    await initPromise;
+
+    // init()'s getState() (state: 'idle') must have been discarded, not applied on top.
+    expect(useStore.getState().scenario.scenarioId).toBe('t2-missing-scope');
+    expect(useStore.getState().scenario.state).toBe('active');
+  });
+
+  it('a scenario:activated push over SSE beats a slower, now-stale in-flight fetch', async () => {
+    // The push could be this client's own activate() landing over SSE, or (Demo mode's
+    // whole point) a curl / real-Postman / another-tab activation. Either way, once the
+    // server has pushed authoritative state, an older fetch that only resolves afterward
+    // must not be allowed to overwrite it.
+    let resolveGetState: (value: EnginePublicState) => void = () => {};
+    const pendingGetState = new Promise<EnginePublicState>((resolve) => {
+      resolveGetState = resolve;
+    });
+    mocked.health.mockResolvedValue({ ok: true, version: '0.0.0', port: 4600 });
+    mocked.getState.mockReturnValue(pendingGetState);
+    mocked.listScenarios.mockResolvedValue([]);
+
+    const initPromise = useStore.getState().init();
+    await new Promise((resolve) => setTimeout(resolve, 0)); // let init() reach its getState() call
+
+    useStore.getState().handleTrainerEvent({
+      type: 'scenario:activated',
+      ts: 1,
+      ...activatedPayload({ scenarioId: 't5-hmac-signature' }),
+    });
+    expect(useStore.getState().scenario.scenarioId).toBe('t5-hmac-signature');
+
+    // The stale getState() (captured before the SSE push) resolves last and must lose.
+    resolveGetState({ state: 'idle' });
+    await initPromise;
+
+    expect(useStore.getState().scenario.scenarioId).toBe('t5-hmac-signature');
+    expect(useStore.getState().scenario.state).toBe('active');
+  });
+});
+
+describe('store: init() idempotency', () => {
+  it('a second concurrent init() call (React StrictMode\'s double-invoke) issues no extra requests', async () => {
+    mocked.health.mockResolvedValue({ ok: true, version: '0.0.0', port: 4600 });
+    mocked.getState.mockResolvedValue({ state: 'idle' });
+    mocked.listScenarios.mockResolvedValue([]);
+
+    await Promise.all([useStore.getState().init(), useStore.getState().init()]);
+
+    expect(mocked.health).toHaveBeenCalledTimes(1);
+    expect(mocked.getState).toHaveBeenCalledTimes(1);
+    expect(mocked.listScenarios).toHaveBeenCalledTimes(1);
+  });
+
+  it('a second sequential init() call after the first has already finished is also a no-op', async () => {
+    mocked.health.mockResolvedValue({ ok: true, version: '0.0.0', port: 4600 });
+    mocked.getState.mockResolvedValue({ state: 'idle' });
+    mocked.listScenarios.mockResolvedValue([]);
+
+    await useStore.getState().init();
+    await useStore.getState().init();
+
+    expect(mocked.health).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('store: scenario list refresh', () => {

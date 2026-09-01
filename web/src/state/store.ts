@@ -124,6 +124,15 @@ export interface StoreState {
    * current state directly and are not racing a client-side fetch.
    */
   scenarioEpoch: number;
+  /**
+   * Fix round: `init()` used to bump the epoch only right before its `getState()` call,
+   * after already awaiting `health()`. That still left a window open, wide enough for
+   * `Drill`/`Reset` clicked during the health round trip to take an EARLIER epoch than
+   * `init()`'s own later `getState()`, so `init()`'s stale hydration would win. The epoch
+   * is now claimed as the very first synchronous step of `init()`, before any await, so
+   * nothing issued after `init()` starts can ever be mistaken for older than it.
+   */
+  initStarted: boolean;
   logs: RequestEvent[];
   request: RequestDraft;
   response: ResponseState | null;
@@ -244,6 +253,7 @@ export const useStore = create<StoreState>((set, get) => ({
   scenarios: [],
   scenario: defaultScenarioSlice(),
   scenarioEpoch: 0,
+  initStarted: false,
   logs: [],
   request: defaultRequestDraft(),
   response: null,
@@ -252,6 +262,23 @@ export const useStore = create<StoreState>((set, get) => ({
   ui: { ...loadPersistedUi(), activeReferenceTab: 'ticket', responseViewMode: 'pretty' },
 
   async init() {
+    // Idempotency guard: React StrictMode double-invokes this effect's callback in dev
+    // (mount -> cleanup -> mount), which used to fire every request in here twice,
+    // producing the paired 200/304 bursts visible in the Logs tab. Both invocations run
+    // this synchronous prefix before either one's first `await`, so the second call
+    // always sees `initStarted` already true and returns without issuing a single
+    // request. This is not a StrictMode-only shim: `init()` genuinely should run exactly
+    // once per page load in production too.
+    if (get().initStarted) return;
+    set({ initStarted: true });
+
+    // The epoch is claimed here, as the very first thing this action does, before any
+    // await: anything a learner triggers (Drill, Reset, picking a scenario) after init()
+    // has started must always be treated as newer than init()'s own hydration, including
+    // during the health() round trip below, not just during the getState() call after it.
+    const epoch = get().scenarioEpoch + 1;
+    set({ scenarioEpoch: epoch });
+
     try {
       const health = await trainerApi.health();
       set({ serverPort: health.port });
@@ -263,12 +290,11 @@ export const useStore = create<StoreState>((set, get) => ({
       set({ errorMessage: `Could not reach the trainer server: ${messageFromError(err)}` });
     }
 
-    const epoch = get().scenarioEpoch + 1;
-    set({ scenarioEpoch: epoch });
     try {
       const state = await trainerApi.getState();
-      // Discard if a faster, more recent scenario action (a click) already moved the
-      // epoch on: this hydration is now stale and must not clobber it.
+      // Discard if a faster, more recent scenario action (a click, or the server pushing
+      // its own scenario:activated over SSE) already moved the epoch on: this hydration
+      // is now stale and must not clobber it.
       if (get().scenarioEpoch === epoch) set({ scenario: engineStateToSlice(state) });
     } catch {
       // Health already reported the outage above; do not double up the banner.
@@ -289,7 +315,13 @@ export const useStore = create<StoreState>((set, get) => ({
         set({ lastHeartbeatTs: event.ts });
         break;
       case 'scenario:activated':
-        set({ scenario: activatedPayloadToSlice(event) });
+        // Also bumps the epoch: this is the server's own authoritative push (it could be
+        // this client's own activate() landing over SSE, or a curl/real-Postman/other-tab
+        // activation in Demo mode), so any REST fetch still in flight from before this
+        // moment (an init() hydration, a slower activate() response arriving out of
+        // order) must now be treated as stale, even though nothing about the epoch would
+        // otherwise say so.
+        set({ scenarioEpoch: get().scenarioEpoch + 1, scenario: activatedPayloadToSlice(event) });
         break;
       case 'scenario:attempt': {
         const scenario = get().scenario;

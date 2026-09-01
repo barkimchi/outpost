@@ -38,7 +38,12 @@ export function statusBand(status: number): StatusBand {
   return 'unknown';
 }
 
+/** Fix round: a sub-10ms response used to floor to `0 ms` (`Math.round` on a real
+ *  sub-millisecond float), which reads as "instant" or "missing" rather than the genuine
+ *  fast number it is. A troubleshooter reads response time explicitly (the learning path
+ *  teaches it), so anything under 10ms keeps one decimal instead of flooring to zero. */
 export function formatMs(ms: number): string {
+  if (ms < 10) return `${ms.toFixed(1)} ms`;
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(2)} s`;
 }

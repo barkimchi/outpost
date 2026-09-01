@@ -3,7 +3,7 @@ import { ChevronRight } from 'lucide-react';
 import type { RequestEvent } from '@gym/shared';
 import { useStore } from '../../state/store.js';
 import { CodeBlock } from '../CodeBlock.js';
-import { formatClockTime, statusBand } from '../../lib/format.js';
+import { formatClockTime, formatMs, statusBand } from '../../lib/format.js';
 import { STATUS_BAND_CLASSES } from '../../lib/statusColors.js';
 
 /**
@@ -46,7 +46,7 @@ function LogRow({ event }: { event: RequestEvent }): React.JSX.Element {
         <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ${STATUS_BAND_CLASSES[statusBand(event.status)]}`}>
           {event.status}
         </span>
-        <span className="w-14 shrink-0 text-right font-mono text-[10px] text-gym-text-faint">{Math.round(event.durationMs)}ms</span>
+        <span className="w-16 shrink-0 text-right font-mono text-[10px] text-gym-text-faint">{formatMs(event.durationMs)}</span>
         <SourceBadge source={event.source} />
       </button>
       {open && (
