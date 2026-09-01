@@ -1,6 +1,9 @@
 node_modules/
 dist/
-data/*.json
+data/*
+!data/.gitkeep
 .superpowers/
 .DS_Store
 *.log
+.env
+*.tsbuildinfo
