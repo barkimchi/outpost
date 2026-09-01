@@ -6,12 +6,19 @@
  *
  * Hard constraint 3 (no real credentials, no network egress to real Slack) means none of
  * this was reproduced by an actual authenticated call. Everything below is sourced from
- * Slack's own public API reference (docs.slack.dev, fetched 2026-08-31; api.slack.com's
- * equivalent paths 302-redirect there now, so both names appear in comments below,
- * whichever the fetch actually landed on) and, for the one field the reference page did not
- * show a JSON example for (`missing_scope`'s `needed`/`provided`), independently
- * corroborated by multiple third-party bug reports quoting the identical response shape
- * (slack-node-sdk and slack-python-sdk GitHub issues), never reproduced live here.
+ * Slack's own public API reference (docs.slack.dev, fetched 2026-08-31/2026-09-01;
+ * api.slack.com's equivalent paths 302-redirect there now, so both names appear in
+ * comments below, whichever the fetch actually landed on).
+ *
+ * Fix round (task-7 review, finding 2, constraint 7b): a `slackMissingScope()` fixture and
+ * `SlackMissingScopeBody` type used to live here, fully sourced with a provenance comment,
+ * with zero consumers anywhere (no router path ever called it, no scenario, no test).
+ * This mock does not model per-token OAuth scopes at all (`platforms/slack/router.ts`'s
+ * `authenticateOrRespond` checks only "is this the one real bot token," not a scope set),
+ * so there was no honest route to wire `missing_scope` into without inventing a whole scope
+ * subsystem nothing else needs. Deleted rather than left as an authored-but-unread producer
+ * (the exact pattern hard constraint 7b names, "a producer with no consumer looks correct
+ * in review, passes typecheck").
  *
  * The load-bearing lesson of this whole platform (docs/SPEC.md section 12, scenario
  * t5-envelope-trap): confirmed directly from docs.slack.dev/reference/methods/
@@ -35,24 +42,6 @@ export interface SlackErrorBody {
 // with HTTP 200 (see header comment).
 export function slackError(error: string): SlackErrorBody {
   return { ok: false, error };
-}
-
-export interface SlackMissingScopeBody extends SlackErrorBody {
-  error: 'missing_scope';
-  needed: string;
-  provided: string;
-}
-
-// UNVERIFIED SHAPE: the envelope ({ok, error} at HTTP 200, per header comment) is
-// confirmed; the needed/provided fields are NOT shown on the chat.postMessage reference
-// page itself (it lists "missing_scope" only as a named error code with no example body).
-// Corroborated instead by multiple independent third-party reports (slackapi/node-slack-
-// sdk and slackapi/python-slack-sdk GitHub issues) quoting the identical
-// {"ok":false,"error":"missing_scope","needed":"...","provided":"..."} shape consistently
-// across different methods and years, strong circumstantial evidence but not Slack's own
-// documentation showing it byte-exact, so this is not claimed as a confirmed `// source:`.
-export function slackMissingScope(needed: string, provided: string): SlackMissingScopeBody {
-  return { ok: false, error: 'missing_scope', needed, provided };
 }
 
 // --- auth.test (docs/SPEC.md section 5) --------------------------------------------------
@@ -147,6 +136,17 @@ export function slackListChannelsBody(channels: Array<{ id: string; name: string
 }
 
 // --- conversations.history (docs/SPEC.md section 5) ----------------------------------------
+
+// source: docs.slack.dev/apis/web-api/pagination (2026-09-01, current canonical URL;
+// api.slack.com/apis/pagination redirects there): "invalid_cursor" is documented as "the
+// only error specific to pagination that you might encounter," returned when "navigating
+// a paginated collection and providing a cursor value that just does not compute, either
+// it's gibberish, somehow encoded wrong, or of too great a vintage." The page names the
+// error code but does not render a full example JSON body; the envelope itself
+// ({"ok":false,"error":"invalid_cursor"}, HTTP 200) is the same confirmed convention every
+// other error in this file uses, applied via the shared `slackError()` helper above (see
+// `platforms/slack/router.ts`'s `conversations.history` handler, fix round finding 6: a
+// garbage or stale cursor used to silently reset to page 1 instead of surfacing this).
 
 export interface SlackHistoryMessage {
   type: 'message';

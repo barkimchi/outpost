@@ -102,10 +102,11 @@ export interface GoogleRefreshToken {
 /**
  * One document the Glean indexing mock has actually received via `POST /indexdocument` or
  * `/indexdocuments` (Task 7), distinct from `World.glean.docs` (the run's PRE-SEEDED,
- * already-searchable company content). Deliberately minimal: no scenario in this task
- * asserts on indexing status beyond "a call to indexdocument/indexdocuments with a valid
- * indexing token and a well-formed document succeeds and the document is retrievable from
- * getdocumentstatus," which is exactly what these fields support.
+ * already-searchable company content). Every field here has a real HTTP-reachable
+ * consumer: `GET /api/index/v1/getdocumentstatus` (`platforms/glean/router.ts`) echoes
+ * `title` and `indexedAt` back once a document is indexed (fix round, task-7 review
+ * finding 2: both were write-only before this, populated at indexing time and read by
+ * nothing, exactly the producer-with-no-consumer pattern hard constraint 7b names).
  */
 export interface GleanIndexedDoc {
   id: string;

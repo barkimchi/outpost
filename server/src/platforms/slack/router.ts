@@ -30,11 +30,27 @@ import {
  * outcome, success or failure, putting the real result in the JSON body's `ok` field.
  * EVERY handler below therefore calls `res.json(...)` with an implicit 200, never
  * `res.status(4xx)`, for any Slack-API-shaped failure (`not_in_channel`,
- * `channel_not_found`, `invalid_auth`, `not_authed`): this is not an oversight, it is the
- * lesson. The one genuine non-200 status in this file is `POST /webhook/events`'s
- * signature failure, which is not a real slack.com endpoint at all (see `sign.ts`'s header
- * comment on what this endpoint actually simulates) and follows this mock's own,
- * documented-as-such convention instead.
+ * `channel_not_found`, `invalid_auth`, `not_authed`, `invalid_cursor`): this is not an
+ * oversight, it is the lesson. The one genuine non-200 status in this file is
+ * `POST /webhook/events`'s signature failure, which is not a real slack.com endpoint at
+ * all (see `sign.ts`'s header comment on what this endpoint actually simulates) and
+ * follows this mock's own, documented-as-such convention instead.
+ *
+ * Fix round (task-7 review, finding 1, hard constraint 9): real Slack accepts BOTH `GET`
+ * and `POST` on every Web API method (form-encoded `POST` is Slack's own canonical style;
+ * `GET` with query-string params also works), so a learner's first, entirely plausible
+ * attempt might use either verb regardless of which one a given scenario's ticket happens
+ * to model. Before this fix, only ONE verb was registered per `/api/*` route (`POST` for
+ * `auth.test`/`chat.postMessage`/`conversations.join`, `GET` for `conversations.list`/
+ * `conversations.history`), so the OTHER verb 404'd from the generic handler with zero
+ * `scenario:attempt` and no SSE event: total silence on a first-choice wrong attempt, a
+ * hard constraint 9 violation, and also wrong on its own terms (real Slack never 404s a
+ * real method for using the "other" verb; it answers the same JSON envelope either way).
+ * Every `/api/*` route below now registers both verbs against the SAME handler function,
+ * which reads its parameters from body OR query via `readParam()` so either verb's
+ * request shape works identically. `POST /webhook/events` is deliberately excluded: it is
+ * not a real Slack Web API method at all (see above), and real webhook DELIVERY from
+ * Slack is always POST, so there is no "real Slack accepts GET here too" fact to mirror.
  */
 
 function extractSlackToken(req: Request): string | null {
@@ -43,12 +59,27 @@ function extractSlackToken(req: Request): string | null {
     const match = header.match(/^Bearer\s+(.+)$/i);
     if (match?.[1]) return match[1];
   }
+  const token = readParam(req, 'token');
+  return token === undefined ? null : token;
+}
+
+/**
+ * Reads one parameter from either the request body (form-encoded or JSON, however `POST`
+ * sent it) or the query string (however `GET` sent it), body taking priority when both are
+ * present. Fix round (task-7 review, finding 1): every `/api/*` handler now accepts either
+ * verb, so every parameter read in this file goes through this single function instead of
+ * reaching into `req.body` or `req.query` directly, the way `readChannelId()` (now
+ * deleted) and `conversations.history`'s inline `req.query.channel`/`req.query.cursor`
+ * reads used to, both of which would have silently returned nothing for a same-shaped
+ * request sent via the other verb.
+ */
+function readParam(req: Request, name: string): string | undefined {
   const body = req.body as Record<string, unknown> | undefined;
-  const bodyToken = body?.token;
-  if (typeof bodyToken === 'string' && bodyToken !== '') return bodyToken;
-  const queryToken = req.query.token;
-  if (typeof queryToken === 'string' && queryToken !== '') return queryToken;
-  return null;
+  const fromBody = body?.[name];
+  if (typeof fromBody === 'string' && fromBody !== '') return fromBody;
+  const fromQuery = req.query[name];
+  if (typeof fromQuery === 'string' && fromQuery !== '') return fromQuery;
+  return undefined;
 }
 
 /** On failure, writes the `{ok:false, error:...}` body itself (HTTP 200, per the header
@@ -69,11 +100,6 @@ function authenticateOrRespond(req: Request, res: Response): true | null {
   return true;
 }
 
-function readChannelId(source: unknown): string {
-  const value = (source as Record<string, unknown> | undefined)?.channel;
-  return typeof value === 'string' ? value : '';
-}
-
 // --- conversations.history pagination (docs/SPEC.md section 12, t5-envelope-trap) --------
 //
 // Clamped to a small page size regardless of the caller's requested `limit`, deliberately:
@@ -85,15 +111,32 @@ function readChannelId(source: unknown): string {
 // actually requires (those apply to error bodies, not to a success-path page-size choice).
 const HISTORY_PAGE_SIZE = 4;
 
-function decodeCursor(cursor: unknown): number {
-  if (typeof cursor !== 'string' || cursor === '') return 0;
-  try {
-    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-    const n = Number(decoded);
-    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
-  } catch {
-    return 0;
-  }
+interface CursorDecodeResult {
+  ok: boolean;
+  offset: number;
+}
+
+/**
+ * Absent or empty is a legitimate "start from page 1" (the normal, expected shape of the
+ * FIRST call in a pagination sequence, never an error). Anything else must decode to a
+ * genuine non-negative integer or it is rejected as `invalid_cursor` (fix round, task-7
+ * review finding 6): garbage, a tampered value, or a cursor replayed from a different
+ * scenario activation (a different `Buffer.from(...)`-decodable-but-nonsensical string)
+ * used to silently reset to offset 0 instead of surfacing the real Slack error this exact
+ * situation documents (`platforms/slack/fixtures.ts`'s sourced comment on
+ * `slackError('invalid_cursor')`). Server-side pagination termination was never at risk
+ * either way (a bad cursor never produced an infinite loop), but a learner replaying a
+ * stale cursor deserves the real envelope, not a silent restart.
+ */
+function decodeCursor(cursor: string | undefined): CursorDecodeResult {
+  if (cursor === undefined || cursor === '') return { ok: true, offset: 0 };
+  // Buffer's base64url decoder never throws on malformed input (it silently drops bytes
+  // it cannot parse), so garbage is caught below by the numeric check, not by a try/catch.
+  const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+  if (decoded.trim() === '') return { ok: false, offset: 0 }; // a non-empty param that decoded to nothing meaningful
+  const n = Number(decoded);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return { ok: false, offset: 0 };
+  return { ok: true, offset: n };
 }
 
 function encodeCursor(offset: number): string {
@@ -108,7 +151,7 @@ export function createSlackRouter(): Router {
   const router = Router();
 
   // --- auth.test ---------------------------------------------------------------------
-  router.post('/api/auth.test', (req, res) => {
+  function authTest(req: Request, res: Response): void {
     if (!authenticateOrRespond(req, res)) return;
     const world = activeWorld();
     res.json(
@@ -119,14 +162,15 @@ export function createSlackRouter(): Router {
         botId: `B${world.slack.botUserId.slice(1)}`,
       }),
     );
-  });
+  }
+  router.route('/api/auth.test').get(authTest).post(authTest);
 
   // --- chat.postMessage (the envelope trap) -------------------------------------------
-  router.post('/api/chat.postMessage', (req, res) => {
+  function chatPostMessage(req: Request, res: Response): void {
     if (!authenticateOrRespond(req, res)) return;
     const world = activeWorld();
-    const channelId = readChannelId(req.body);
-    const text = typeof (req.body as Record<string, unknown> | undefined)?.text === 'string' ? String((req.body as Record<string, unknown>).text) : '';
+    const channelId = readParam(req, 'channel') ?? '';
+    const text = readParam(req, 'text') ?? '';
     const channel = world.slack.channels.find((c) => c.id === channelId);
     if (!channel) {
       res.json(slackError('channel_not_found'));
@@ -137,19 +181,21 @@ export function createSlackRouter(): Router {
       return;
     }
     res.json(slackPostMessageSuccess(channel.id, text, world.slack.botUserId));
-  });
+  }
+  router.route('/api/chat.postMessage').get(chatPostMessage).post(chatPostMessage);
 
   // --- conversations.list --------------------------------------------------------------
-  router.get('/api/conversations.list', (req, res) => {
+  function conversationsList(req: Request, res: Response): void {
     if (!authenticateOrRespond(req, res)) return;
     res.json(slackListChannelsBody(activeWorld().slack.channels));
-  });
+  }
+  router.route('/api/conversations.list').get(conversationsList).post(conversationsList);
 
   // --- conversations.join --------------------------------------------------------------
-  router.post('/api/conversations.join', (req, res) => {
+  function conversationsJoin(req: Request, res: Response): void {
     if (!authenticateOrRespond(req, res)) return;
     const world = activeWorld();
-    const channelId = readChannelId(req.body);
+    const channelId = readParam(req, 'channel') ?? '';
     const channel = world.slack.channels.find((c) => c.id === channelId);
     if (!channel) {
       res.json(slackError('channel_not_found'));
@@ -158,13 +204,14 @@ export function createSlackRouter(): Router {
     const alreadyMember = channel.isMember;
     channel.isMember = true;
     res.json(slackJoinSuccess(channel, alreadyMember));
-  });
+  }
+  router.route('/api/conversations.join').get(conversationsJoin).post(conversationsJoin);
 
   // --- conversations.history (cursor pagination) ----------------------------------------
-  router.get('/api/conversations.history', (req, res) => {
+  function conversationsHistory(req: Request, res: Response): void {
     if (!authenticateOrRespond(req, res)) return;
     const world = activeWorld();
-    const channelId = typeof req.query.channel === 'string' ? req.query.channel : '';
+    const channelId = readParam(req, 'channel') ?? '';
     const channel = world.slack.channels.find((c) => c.id === channelId);
     if (!channel) {
       res.json(slackError('channel_not_found'));
@@ -174,13 +221,19 @@ export function createSlackRouter(): Router {
       res.json(slackError('not_in_channel'));
       return;
     }
+    const cursorResult = decodeCursor(readParam(req, 'cursor'));
+    if (!cursorResult.ok) {
+      res.json(slackError('invalid_cursor'));
+      return;
+    }
     const all = world.slack.messages[channelId] ?? [];
-    const offset = decodeCursor(req.query.cursor);
+    const offset = cursorResult.offset;
     const page = all.slice(offset, offset + HISTORY_PAGE_SIZE);
     const hasMore = offset + HISTORY_PAGE_SIZE < all.length;
     const nextCursor = hasMore ? encodeCursor(offset + HISTORY_PAGE_SIZE) : '';
     res.json(slackHistoryPage(page.map(toHistoryMessage), hasMore, nextCursor));
-  });
+  }
+  router.route('/api/conversations.history').get(conversationsHistory).post(conversationsHistory);
 
   // --- webhook/events (HMAC verification; see sign.ts's header comment) ------------------
   router.post('/webhook/events', (req, res) => {

@@ -180,6 +180,71 @@ test('t5-envelope-trap solved end to end: not_in_channel attempt, join, successf
   }
 });
 
+// --- Fix round (task-7 review, finding 1, hard constraint 9): a POST to
+// conversations.history, or a GET to chat.postMessage, used to 404 from the generic
+// handler with zero scenario:attempt and no SSE event at all, since only one verb was
+// registered per route. Both now register as real attempts, with a real reason. ----------
+
+test('a POST to conversations.history (previously silent, 404) now registers as a real scenario:attempt with a reason, at step-2', async () => {
+  const engine = freshEngine();
+  const { events, stop } = collectTrainerEvents();
+  const app = buildRealPipelineApp();
+  const { server, port } = await listen(app);
+  try {
+    const activated = engine.activate('t5-envelope-trap');
+    const botToken = extractLabeled(activated.ticketMd, 'Bot token');
+    const channelId = extractLabeled(activated.ticketMd, 'Channel');
+
+    // Join and post first, so step-1 completes and step-2 (conversations.history) is the
+    // CURRENT step the engine is actually evaluating attempts against.
+    await fetch(`http://127.0.0.1:${port}/slack/api/conversations.join`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: channelId }),
+    });
+    await fetch(`http://127.0.0.1:${port}/slack/api/chat.postMessage`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: channelId, text: 'alert' }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(engine.getState().currentStepIndex, 1, 'sanity: step-1 must be done, step-2 must be current');
+
+    // The actual fix under test: POST (form-encoded, Slack's own canonical style) to an
+    // endpoint this scenario's step matcher lists as GET. Before this fix, the router
+    // itself 404'd here (no POST handler was ever registered on this path), which the
+    // engine correctly ignores as a non-match ("browsing"); now the router answers for
+    // real, and this is a genuine, scoreable first PAGE (has_more likely true), not yet a
+    // pass, so it must land as a scenario:attempt with a real reason, never silence.
+    const res = await fetch(`http://127.0.0.1:${port}/slack/api/conversations.history`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ channel: channelId }).toString(),
+    });
+    assert.equal(res.status, 200, 'must never 404: real Slack accepts POST on every Web API method');
+    const body = (await res.json()) as { ok: boolean; has_more: boolean };
+    assert.equal(body.ok, true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const step2Attempts = events.filter(
+      (e): e is Extract<TrainerEvent, { type: 'scenario:attempt' }> => e.type === 'scenario:attempt' && e.stepId === 'step-2',
+    );
+    if (body.has_more) {
+      assert.ok(step2Attempts.length > 0, 'a first, incomplete page via POST must register as a scenario:attempt with a reason');
+      assert.ok(step2Attempts[0]?.reason.length ?? 0 > 0);
+    } else {
+      // Small channel history could in principle fit on one page; either way, the request
+      // was genuinely scored (either an attempt, or immediately a completed step), never
+      // silently dropped.
+      assert.ok(events.some((e) => e.type === 'scenario:step' && e.stepId === 'step-2'));
+    }
+  } finally {
+    stop();
+    server.close();
+    engine.dispose();
+  }
+});
+
 test('t5-hmac-signature solved end to end: a wrong signature is a real attempt, a correctly computed one solves it', async () => {
   const engine = freshEngine();
   const { events, stop } = collectTrainerEvents();

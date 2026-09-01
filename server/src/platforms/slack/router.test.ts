@@ -293,3 +293,153 @@ test('webhook/events: a wrong signature, or the right secret over re-serialized 
     server.close();
   }
 });
+
+// --- GET/POST symmetry on every /api/* route (fix round, task-7 review finding 1) --------
+//
+// Real Slack accepts both verbs on every Web API method. Before this fix, only one verb
+// was registered per route, so the OTHER verb 404'd from the generic handler: total
+// silence, and the wrong envelope (a 404 where real Slack answers 200) on top.
+
+test('GET works on chat.postMessage (previously POST-only), with the exact same envelope behavior as POST', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const world = activeWorld();
+  const channel = world.slack.channels[0];
+  if (!channel) throw new Error('sanity: fixture must have at least one channel');
+  channel.isMember = false;
+  const { server, port } = await listen();
+  try {
+    const url = new URL(`http://127.0.0.1:${port}/slack/api/chat.postMessage`);
+    url.searchParams.set('channel', channel.id);
+    url.searchParams.set('text', 'hello via GET');
+    const res = await fetch(url, { headers: { authorization: `Bearer ${ctx.slack.botToken}` } });
+    assert.equal(res.status, 200, 'a real Slack method must never 404 for using the other verb');
+    assert.deepEqual(await res.json(), { ok: false, error: 'not_in_channel' });
+  } finally {
+    server.close();
+  }
+});
+
+test('GET with no credential on chat.postMessage returns not_authed (not_authed reachable on the previously-missing verb too)', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/slack/api/chat.postMessage`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: false, error: 'not_authed' });
+  } finally {
+    server.close();
+  }
+});
+
+test('POST works on conversations.history (previously GET-only), form-encoded, with real pagination', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const world = activeWorld();
+  const channel = world.slack.channels[0];
+  if (!channel) throw new Error('sanity: fixture must have at least one channel');
+  channel.isMember = true;
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/slack/api/conversations.history`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.slack.botToken}`, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ channel: channel.id }).toString(),
+    });
+    assert.equal(res.status, 200, 'a real Slack method must never 404 for using the other verb');
+    const body = (await res.json()) as { ok: boolean; messages: unknown[] };
+    assert.equal(body.ok, true);
+    assert.ok(body.messages.length > 0);
+  } finally {
+    server.close();
+  }
+});
+
+test('GET/POST also both work on auth.test, conversations.list, and conversations.join', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const world = activeWorld();
+  const channel = world.slack.channels[0];
+  if (!channel) throw new Error('sanity: fixture must have at least one channel');
+  const { server, port } = await listen();
+  try {
+    for (const method of ['GET', 'POST'] as const) {
+      const authRes = await fetch(`http://127.0.0.1:${port}/slack/api/auth.test`, {
+        method,
+        headers: { authorization: `Bearer ${ctx.slack.botToken}` },
+      });
+      assert.equal(authRes.status, 200, `auth.test must accept ${method}`);
+      assert.equal(((await authRes.json()) as { ok: boolean }).ok, true);
+
+      const listRes = await fetch(`http://127.0.0.1:${port}/slack/api/conversations.list`, {
+        method,
+        headers: { authorization: `Bearer ${ctx.slack.botToken}` },
+      });
+      assert.equal(listRes.status, 200, `conversations.list must accept ${method}`);
+
+      const joinUrl = new URL(`http://127.0.0.1:${port}/slack/api/conversations.join`);
+      const joinRes = await fetch(method === 'GET' ? `${joinUrl}?channel=${channel.id}` : joinUrl, {
+        method,
+        headers: {
+          authorization: `Bearer ${ctx.slack.botToken}`,
+          ...(method === 'POST' ? { 'content-type': 'application/json' } : {}),
+        },
+        ...(method === 'POST' ? { body: JSON.stringify({ channel: channel.id }) } : {}),
+      });
+      assert.equal(joinRes.status, 200, `conversations.join must accept ${method}`);
+      assert.equal(((await joinRes.json()) as { ok: boolean }).ok, true);
+    }
+  } finally {
+    server.close();
+  }
+});
+
+// --- invalid_cursor (fix round, task-7 review finding 6, minor) --------------------------
+
+test('conversations.history: a garbage cursor returns invalid_cursor instead of silently restarting at page 1', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const world = activeWorld();
+  const channel = world.slack.channels[0];
+  if (!channel) throw new Error('sanity: fixture must have at least one channel');
+  channel.isMember = true;
+  const { server, port } = await listen();
+  try {
+    const garbage = await fetch(
+      `http://127.0.0.1:${port}/slack/api/conversations.history?channel=${channel.id}&cursor=not-a-real-cursor-!!!`,
+      { headers: { authorization: `Bearer ${ctx.slack.botToken}` } },
+    );
+    assert.equal(garbage.status, 200);
+    assert.deepEqual(await garbage.json(), { ok: false, error: 'invalid_cursor' });
+
+    // A negative offset, and non-integer garbage, must also be rejected, not clamped.
+    const negative = await fetch(
+      `http://127.0.0.1:${port}/slack/api/conversations.history?channel=${channel.id}&cursor=${Buffer.from('-5').toString('base64url')}`,
+      { headers: { authorization: `Bearer ${ctx.slack.botToken}` } },
+    );
+    assert.deepEqual(await negative.json(), { ok: false, error: 'invalid_cursor' });
+
+    // No cursor at all (the legitimate first call) is NOT an error.
+    const first = await fetch(`http://127.0.0.1:${port}/slack/api/conversations.history?channel=${channel.id}`, {
+      headers: { authorization: `Bearer ${ctx.slack.botToken}` },
+    });
+    const firstBody = (await first.json()) as { ok: boolean };
+    assert.equal(firstBody.ok, true);
+
+    // A genuine, correctly-encoded cursor from a real prior response still works.
+    const nextCursor = ((await (
+      await fetch(`http://127.0.0.1:${port}/slack/api/conversations.history?channel=${channel.id}`, {
+        headers: { authorization: `Bearer ${ctx.slack.botToken}` },
+      })
+    ).json()) as { response_metadata: { next_cursor: string } }).response_metadata.next_cursor;
+    assert.notEqual(nextCursor, '', 'sanity: this channel must have more than one page');
+    const secondPage = await fetch(
+      `http://127.0.0.1:${port}/slack/api/conversations.history?channel=${channel.id}&cursor=${nextCursor}`,
+      { headers: { authorization: `Bearer ${ctx.slack.botToken}` } },
+    );
+    assert.equal(((await secondPage.json()) as { ok: boolean }).ok, true);
+  } finally {
+    server.close();
+  }
+});

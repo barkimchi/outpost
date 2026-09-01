@@ -151,9 +151,21 @@ export interface GleanDocumentStatus {
   id: string;
   datasource: string;
   status: 'INDEXED' | 'NOT_FOUND';
+  title?: string;
+  indexedAt?: number;
 }
 
 // UNVERIFIED SHAPE: approximated, same reasoning as gleanIndexSuccess() above.
-export function gleanDocumentStatus(id: string, datasource: string, indexed: boolean): GleanDocumentStatus {
-  return { id, datasource, status: indexed ? 'INDEXED' : 'NOT_FOUND' };
+//
+// Fix round (task-7 review, finding 2, constraint 7b): `title` and `indexedAt` are real
+// fields on `World.glean.indexedDocs`'s records (written by `platforms/glean/router.ts`'s
+// indexdocument/indexdocuments handlers) that had zero consumers: nothing ever read them
+// back out over HTTP. Wired in here rather than deleted, since a getDocumentStatus-style
+// endpoint plausibly reporting when and under what title a document was indexed is a
+// reasonable, low-risk completion of this envelope (an indexing status check that could
+// not tell you WHEN something was indexed would be a strange lesser cousin of the real
+// thing), and it is genuinely reachable: see `platforms/glean/router.test.ts`.
+export function gleanDocumentStatus(id: string, datasource: string, doc: { title?: string; indexedAt: number } | undefined): GleanDocumentStatus {
+  if (!doc) return { id, datasource, status: 'NOT_FOUND' };
+  return { id, datasource, status: 'INDEXED', title: doc.title, indexedAt: doc.indexedAt };
 }

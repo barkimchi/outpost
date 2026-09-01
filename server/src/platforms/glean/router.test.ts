@@ -175,7 +175,8 @@ test('indexdocuments (bulk) stores every document; getdocumentstatus reports IND
       { headers: { authorization: `Bearer ${ctx.glean.indexingToken}` } },
     );
     assert.equal(before.status, 200);
-    assert.equal(((await before.json()) as { status: string }).status, 'NOT_FOUND');
+    const beforeBody = (await before.json()) as { status: string; title?: string; indexedAt?: number };
+    assert.equal(beforeBody.status, 'NOT_FOUND');
 
     const bulk = await fetch(`http://127.0.0.1:${port}/glean/api/index/v1/indexdocuments`, {
       method: 'POST',
@@ -193,7 +194,17 @@ test('indexdocuments (bulk) stores every document; getdocumentstatus reports IND
       `http://127.0.0.1:${port}/glean/api/index/v1/getdocumentstatus?id=doc-bulk-1&datasource=${ctx.glean.datasource}`,
       { headers: { authorization: `Bearer ${ctx.glean.indexingToken}` } },
     );
-    assert.equal(((await after.json()) as { status: string }).status, 'INDEXED');
+    const afterBody = (await after.json()) as { status: string; title?: string; indexedAt?: number };
+    assert.equal(afterBody.status, 'INDEXED');
+    // Fix round (task-7 review, finding 2, constraint 7b): title/indexedAt used to be
+    // write-only on World.glean.indexedDocs (populated at indexing time, read by nothing).
+    // Now genuinely reachable over HTTP: this is their real, live consumer.
+    assert.equal(afterBody.title, 'A', 'title must be echoed back from the indexed record');
+    assert.ok(typeof afterBody.indexedAt === 'number' && afterBody.indexedAt > 0, 'indexedAt must be a real timestamp');
+
+    assert.equal(beforeBody.title, undefined, 'NOT_FOUND must never carry a title');
+    assert.equal(beforeBody.indexedAt, undefined, 'NOT_FOUND must never carry an indexedAt');
+
     assert.ok(activeWorld().glean.indexedDocs['doc-bulk-2']);
   } finally {
     server.close();

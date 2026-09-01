@@ -69,8 +69,15 @@ search for "${sampleQuery}" succeeding with it.
             { kind: 'status', equals: 200 },
             { kind: 'jsonArrayLength', path: 'results', min: 1 },
           ],
+          // Fix round (task-7 review, minor 5): this used to say only "A 401 here means
+          // ...", which misleads on the OTHER way this step's assertion can fail: the
+          // working token, sent with a query that matches nothing indexed, is a genuine
+          // 200 with an empty results array, not a credential problem at all. Both
+          // failure shapes are covered explicitly now, since this same attemptHint text
+          // fires for either one (Step.attemptHint has no way to vary by which assertion
+          // failed).
           attemptHint:
-            'A 401 here means this specific credential is not valid for this specific endpoint, not that both tokens are dead. Try the other one before assuming the integration itself is broken.',
+            'A 401 here means this specific credential is not valid for this specific endpoint, not that both tokens are dead; try the other one. A 200 with zero results means the credential worked but the search text itself did not match anything indexed, which is a different problem entirely.',
         },
       ],
       hints: [

@@ -376,8 +376,19 @@ export function generate(seed: string): RunContext {
     },
     glean: {
       instance: `${companyDomainFirstWord}-be`,
-      clientToken: `glean_client_${rng.token(32, LOWER_ALNUM)}`,
-      indexingToken: `glean_index_${rng.token(32, LOWER_ALNUM)}`,
+      // Fix round (task-7 review, finding 3, constraint 7c extended: "candidates a
+      // learner must distinguish have to be indistinguishable by inspection"). These used
+      // to be `glean_client_<32>` / `glean_index_<32>`: the whole point of t4-token-type
+      // is that the learner must MAKE A REQUEST and read what comes back to tell the two
+      // apart, but a literal "client"/"index" word in the credential itself printed the
+      // answer straight into the ticket, on every single seed, no matter how the display
+      // ORDER was randomized (hard constraint 7a's positional draw was real but bought
+      // nothing once identity was readable without moving anything). Both now mint from
+      // the identical opaque shape (same prefix, same length, same alphabet); the tokens
+      // still differ, since they are drawn from the same RNG stream at different points,
+      // but nothing about either STRING names which is which.
+      clientToken: `glean_${rng.token(40, LOWER_ALNUM)}`,
+      indexingToken: `glean_${rng.token(40, LOWER_ALNUM)}`,
       datasource: `${companyDomainFirstWord}-kb`,
       docs,
     },

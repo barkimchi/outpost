@@ -10,6 +10,7 @@ import { bus } from '../bus.js';
 import { rawBodyMiddlewares } from '../middleware/rawBody.js';
 import { requestLog } from '../middleware/requestLog.js';
 import { createGleanRouter } from '../platforms/glean/router.js';
+import { activeWorld } from '../platforms/world.js';
 import { scenarioRegistry } from './index.js';
 import { Engine } from '../engine/engine.js';
 import { createProgressStore } from '../engine/persist.js';
@@ -65,9 +66,17 @@ function collectTrainerEvents(): { events: TrainerEvent[]; stop: () => void } {
 
 // --- Distribution tests (hard constraint 7a) ----------------------------------------------
 
-const DISTRIBUTION_TEST_RUNS = 14;
+const DISTRIBUTION_TEST_RUNS = 20;
 
-test('t4-token-type: across 14 activations, Token 1 is genuinely the client token sometimes and the indexing token other times', () => {
+test('t4-token-type: across 20 activations, Token 1 is genuinely the client token sometimes and the indexing token other times, and the two tokens are indistinguishable by inspection', () => {
+  // Fix round (task-7 review, finding 3, constraint 7c extended): before this fix, tokens
+  // were minted as `glean_client_<32>` / `glean_index_<32>`, so the answer was printed in
+  // the credential itself, readable without making a single request, on every seed. The
+  // 7a positional draw (which slot Token 1 lands in) was real but bought nothing. The
+  // shape assertions below prove the fix directly: same length, same character set, no
+  // "client"/"index" word in either string. Classification below reads the run's real
+  // World state (activeWorld(), populated live by resetState()) rather than parsing the
+  // token string itself, since parsing it is now, correctly, impossible.
   const engine = freshEngine();
   try {
     let token1IsClient = 0;
@@ -79,12 +88,16 @@ test('t4-token-type: across 14 activations, Token 1 is genuinely the client toke
       const token1 = extractLabeled(activated.ticketMd, 'Token 1');
       const token2 = extractLabeled(activated.ticketMd, 'Token 2');
       assert.notEqual(token1, token2, 'the two listed tokens must never be identical');
-      // Client tokens are minted with the "glean_client_" prefix, indexing tokens with
-      // "glean_index_" (engine/generate.ts). Reading that prefix is the cheapest way to
-      // classify which slot Token 1 landed in without depending on internal World state.
-      if (token1.startsWith('glean_client_')) token1IsClient += 1;
-      else if (token1.startsWith('glean_index_')) token1IsIndexing += 1;
-      else throw new Error(`unrecognized token prefix: ${token1}`);
+      assert.equal(token1.length, token2.length, 'both tokens must be the exact same length');
+      assert.match(token1, /^glean_[a-z0-9]+$/, 'Token 1 must not carry an identifying prefix');
+      assert.match(token2, /^glean_[a-z0-9]+$/, 'Token 2 must not carry an identifying prefix');
+      assert.ok(!/client|index/i.test(token1), `Token 1 must not name which kind it is: ${token1}`);
+      assert.ok(!/client|index/i.test(token2), `Token 2 must not name which kind it is: ${token2}`);
+
+      const world = activeWorld();
+      if (token1 === world.glean.clientToken) token1IsClient += 1;
+      else if (token1 === world.glean.indexingToken) token1IsIndexing += 1;
+      else throw new Error('Token 1 matched neither the client nor the indexing token in World');
     }
     assert.equal(seenTickets.size, DISTRIBUTION_TEST_RUNS, 'every activation must produce distinct ticket text');
     assert.equal(token1IsClient + token1IsIndexing, DISTRIBUTION_TEST_RUNS);

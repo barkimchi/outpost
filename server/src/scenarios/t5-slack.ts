@@ -77,7 +77,12 @@ Get a message actually posted into that channel, then pull its complete message 
         {
           id: 'step-1',
           title: 'Post a message that genuinely lands',
-          match: { method: 'POST', pathPattern: '^/slack/api/chat\\.postmessage$' },
+          // Fix round (task-7 review, finding 1): real Slack accepts BOTH GET and POST on
+          // every Web API method, form-encoded POST being Slack's own canonical style
+          // (platforms/slack/router.ts's own header comment). A learner reaching for POST
+          // here (the natural first instinct) must count as a real attempt whether or not
+          // it happens to match the exact verb this ticket's own narrative implies.
+          match: { method: ['GET', 'POST'], pathPattern: '^/slack/api/chat\\.postmessage$' },
           assertions: [
             { kind: 'status', equals: 200 },
             { kind: 'jsonPath', path: 'ok', equals: true },
@@ -88,7 +93,7 @@ Get a message actually posted into that channel, then pull its complete message 
         {
           id: 'step-2',
           title: 'Pull the full channel history',
-          match: { method: 'GET', pathPattern: '^/slack/api/conversations\\.history$' },
+          match: { method: ['GET', 'POST'], pathPattern: '^/slack/api/conversations\\.history$' },
           assertions: [
             { kind: 'status', equals: 200 },
             { kind: 'jsonPath', path: 'ok', equals: true },

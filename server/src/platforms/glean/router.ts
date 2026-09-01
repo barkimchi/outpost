@@ -163,8 +163,9 @@ export function createGleanRouter(): Router {
       return;
     }
     const world = activeWorld();
-    const indexed = world.glean.indexedDocs[id]?.datasource === datasource;
-    res.json(gleanDocumentStatus(id, datasource, indexed));
+    const record = world.glean.indexedDocs[id];
+    const matchesDatasource = record?.datasource === datasource;
+    res.json(gleanDocumentStatus(id, datasource, matchesDatasource ? record : undefined));
   });
 
   return router;
