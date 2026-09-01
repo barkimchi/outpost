@@ -78,6 +78,17 @@ Train first, showcase second.
    why the thing broke. That belongs in `solutionMd`, revealed after the explain-back
    gate. Same family as 7a: 7a stops the ANSWER being memorizable across runs, 7c stops it
    being readable in the prompt.
+
+   **7c also binds GENERATED IDENTIFIERS, not just prose.** Caught in `t4-token-type`,
+   whose ticket asks "exactly one of these authenticates against the search endpoint, find
+   out which" while the generator mints them as `glean_client_<32>` and
+   `glean_index_<32>`. The answer is printed inside the credential, on 3000 of 3000 seeds.
+   The positional randomization required by 7a was genuinely working and bought nothing,
+   because identity was readable without moving. So: when a scenario asks the learner to
+   distinguish between candidates, the candidates must be **indistinguishable by
+   inspection**. Name them the way the real product does, and if the real product's names
+   are self-describing, the discriminating fact has to be something the learner can only
+   get by making a request.
 7b. **Every field in the scenario contract must have a PROVEN consumer.** This build has
    now shipped the same defect three separate times, each silent because the default value
    was empty or undefined so nothing ever failed:
