@@ -501,9 +501,21 @@ position.
     includes the 5-minute timestamp replay guard. A Postman pre-request script rep.
 
 **Tier 6: capstone (`t6-capstone.ts`)**
-16. `t6-capstone`: 5 steps: consent + code exchange → prove access via userinfo →
-    server revokes the refresh token mid-flight → diagnose `invalid_grant` and re-auth →
-    successful Glean indexing call. This is the recordable Ryan demo.
+16. `t6-capstone`: **6 steps** (was specified as 5; the extra step is deliberate, see
+    below): consent and code exchange → prove access via userinfo → **refresh once and
+    watch it succeed** → send the identical refresh again and get `invalid_grant` →
+    re-auth for a fresh pair → index into Glean and confirm with `getdocumentstatus`.
+    This is the recordable demo.
+
+    **Why 6 and not 5.** The original 5-step shape had the refresh token revoked at
+    activation, so it was dead from birth. A reviewer's judgment, which was correct: "the
+    mid-flight revocation is not mid-flight in any observable way. Nothing happens between
+    steps 2 and 3. It records as a competent OAuth walkthrough, not yet as a moment." The
+    added step makes the credential visibly work before it stops working, so the learner
+    sees a genuine before and after over the *same request*, discoverable as two adjacent
+    rows in the Logs tab (200, then 400) rather than asserted in a ticket. The final step
+    ends on a real payload with an id, status, title, and timestamp instead of an empty
+    `{}`. Both changes exist because this scenario is watched, not just passed.
 
 **Implementation track (`impl-track.ts`, `track:'implementation'`, no faults).**
 Greenfield go-live reps framed as new-customer onboarding, solved purely by reading Docs:
