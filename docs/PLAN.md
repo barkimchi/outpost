@@ -215,6 +215,15 @@ The heart. Read spec §7, §8, §9, §12.
 
 **Build:**
 - `shared/src/scenario.ts` exactly as spec §8.
+- **Boot the World with a default run context.** Verified defect as of commit `351ecb3`:
+  with no scenario activated, `GET /github/user` returns
+  `500 {"error":"Internal Server Error","message":"activeWorld() called before
+  resetState(): no scenario is active yet"}`. That is wrong for three reasons. A learner
+  who opens the app and pokes around before picking an exercise sees a broken tool. The
+  implementation track and free exploration both need working platforms with no scenario
+  active. And a 500 teaches nothing; it reads as a defect, which it is. At boot, mint a
+  seed and call `resetState(generate(seed))` so all four platforms always serve a healthy
+  world. Activating a scenario then replaces it with a fresh one, as it already does.
 - `server/src/engine/generate.ts`: a seeded PRNG (mulberry32 or xorshift over a hashed
   seed string, implemented inline, no dependency) and `generate(seed): RunContext`
   producing every field in spec §8 from name pools. Company names must vary (never always
