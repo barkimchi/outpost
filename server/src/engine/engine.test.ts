@@ -418,9 +418,14 @@ test('activeInterceptFault() matches a registered intercept fault by request sha
   }
 });
 
-test('every registered scenario 1-15 builds without throwing, for every scenario in the registry', () => {
+test('every registered scenario builds without throwing, for every scenario in the registry', () => {
   // A cheap smoke test: build() must not throw for a real generated RunContext, for
-  // every scenario currently registered (tiers 1-5, through Task 7).
+  // every scenario currently registered, whatever tier count that currently is. No
+  // hardcoded length here: a magic number went stale twice already (11 -> 15 across
+  // Tasks 6 and 7) and would go stale again the moment a later task adds the capstone or
+  // the implementation track. The two assertions below are the real, non-drifting
+  // invariants: the registry is non-empty, and every id in it is unique (the loop above
+  // already proves every one of them builds).
   const engine = freshEngine();
   try {
     for (const def of scenarioRegistry) {
@@ -430,7 +435,9 @@ test('every registered scenario 1-15 builds without throwing, for every scenario
       assert.ok((payload.steps ?? []).length > 0);
       assert.ok(payload.docsRef.length > 0, `${def.id}: docsRef must be a real, non-empty reference`);
     }
-    assert.equal(scenarioRegistry.length, 15, 'scenarios 1-15 are registered (tiers 1-5)');
+    assert.ok(scenarioRegistry.length > 0, 'the registry must not be empty');
+    const uniqueIds = new Set(scenarioRegistry.map((def) => def.id));
+    assert.equal(uniqueIds.size, scenarioRegistry.length, 'every scenario id in the registry must be unique');
   } finally {
     engine.dispose();
   }
