@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -b .",
+    "build": "tsc -b . && mkdir -p dist/content/docs && cp src/content/docs/*.md dist/content/docs/",
     "start": "node dist/index.js",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
