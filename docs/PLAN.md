@@ -411,6 +411,14 @@ hints and solution reveal UI, the full `content/docs/*.md` set (one per platform
 topics, written well enough that the implementation track is solvable from them alone),
 and `README.md` with the demo script and a real-Postman setup guide.
 
+Also add a **"Reset all progress"** affordance (a control in the UI plus
+`DELETE /_trainer/api/progress`), with a confirm step. `data/progress.json` accumulates
+entries from every manual verification run during the build, so Bar's first real rep would
+otherwise start against a history full of agent residue. It also gives him a clean slate
+before recording the capstone demo. Never delete the file silently or on startup; the
+explain-back writeups it holds are the most valuable thing the app stores and are not
+reconstructable, so this is an explicit user action only.
+
 **Verify:** capstone dry run once fully in the UI and once mixing real Postman; one blind
 Drill run solved from ticket and logs alone; one implementation-track go-live completed
 from the docs alone; `npm run build && npm start` serves everything on one port.
