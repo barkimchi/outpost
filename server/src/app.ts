@@ -9,6 +9,8 @@ import { createTrainerRouter } from './trainer/router.js';
 import { oauthCallbackHandler } from './trainer/oauthCallback.js';
 import { createGithubRouter } from './platforms/github/router.js';
 import { createGoogleRouter } from './platforms/google/router.js';
+import { createGleanRouter } from './platforms/glean/router.js';
+import { createSlackRouter } from './platforms/slack/router.js';
 
 /**
  * MOUNT ORDER LIVES HERE. This is the load-bearing part of the whole project
@@ -29,8 +31,7 @@ import { createGoogleRouter } from './platforms/google/router.js';
  *                        trainer router itself: health, proxy, SSE, scenarios API,
  *                        workspace, docs.
  *   5. platform routers  /github /google /glean /slack (healthy behavior only). /github
- *                        lands in Task 2, /google in Task 6; /glean /slack are not
- *                        mounted yet.
+ *                        lands in Task 2, /google in Task 6, /glean and /slack in Task 7.
  *   6. static            web/dist + SPA fallback, PROD ONLY (spec section 6 step 6).
  *                        The platform-prefix guard runs before express.static, not after:
  *                        a request for /github/... etc. must never be answered by a
@@ -92,11 +93,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.get('/_trainer/oauth/callback', oauthCallbackHandler);
   app.use('/_trainer', createTrainerRouter());
 
-  // --- 5. platform routers (/github, /google now; /glean /slack land in later tasks) ---
+  // --- 5. platform routers ---------------------------------------------------------------
   app.use('/github', createGithubRouter());
   app.use('/google', createGoogleRouter());
-  // /glean /slack are not mounted yet: requests to those prefixes fall through to step
-  // 6's guard (which never serves them) and then to the 404 handler in step 7.
+  app.use('/glean', createGleanRouter());
+  app.use('/slack', createSlackRouter());
 
   // --- 6. static web/dist + SPA fallback (prod only) ---
   if (production) {

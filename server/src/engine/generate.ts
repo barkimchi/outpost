@@ -196,6 +196,22 @@ const WRONG_REDIRECT_VARIANTS = [
 
 const INSUFFICIENT_SCOPE_VARIANTS = ['missing', 'decoy'] as const;
 
+// Task 7, spec hard constraint 7a: t4-token-type hands over BOTH of the run's two real
+// Glean tokens, neutrally labeled "Token 1"/"Token 2" (same convention as tier 2's GitHub
+// scenarios), and which one is listed first has to vary independently of which one is
+// actually valid for the search endpoint (the client token, always) or every run would
+// list them in the same clientToken-then-indexingToken order and "Token 1 always works"
+// would become exactly the memorizable positional shortcut hard constraint 7a exists to
+// prevent (the same defect `t2-github.ts`'s header comment documents finding, live, in an
+// earlier round of this project).
+const GLEAN_TOKEN_ORDER_VARIANTS = ['client-first', 'indexing-first'] as const;
+
+// Task 7: t4-malformed-body randomizes WHICH of this mock's two required search-body
+// fields (`query`, real-required per Glean's own docs; `pageSize`, this mock's own added
+// requirement, see platforms/glean/router.ts) is missing from the broken request shown in
+// the ticket, so the fix is never "always add the same field back."
+const GLEAN_MALFORMED_FIELD_VARIANTS = ['query', 'pageSize'] as const;
+
 // Task 6 fix round: t3-token-expiry's access-token TTL used to be a single hardcoded
 // literal (15), identical across every activation and stated verbatim in the ticket text,
 // which together handed the learner both the diagnosis and the fix with nothing left to
@@ -317,6 +333,13 @@ export function generate(seed: string): RunContext {
     isMember: rng.bool(0.5),
   }));
 
+  // Task 7: which channel t5-envelope-trap targets (forced to isMember:false by that
+  // scenario's own state fault, regardless of what the draw above happened to assign),
+  // and the two Glean-search 7a draws described above.
+  const slackTargetChannelIndex = rng.int(0, channels.length - 1);
+  const gleanTokenOrder = rng.pick(GLEAN_TOKEN_ORDER_VARIANTS);
+  const gleanMalformedField = rng.pick(GLEAN_MALFORMED_FIELD_VARIANTS);
+
   const docCount = rng.int(2, 3);
   const docPicks = rng.pickN(GLEAN_DOC_POOL, docCount);
   const docs = docPicks.map((pick, i) => ({
@@ -373,6 +396,9 @@ export function generate(seed: string): RunContext {
       wrongRedirectVariant,
       insufficientScopeVariant,
       shortAccessTokenTtlSec: String(shortAccessTokenTtlSec),
+      slackTargetChannelIndex: String(slackTargetChannelIndex),
+      gleanTokenOrder,
+      gleanMalformedField,
     },
   };
 }

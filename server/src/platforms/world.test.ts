@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activeWorld, resetState } from './world.js';
+import { activeWorld, OLDEST_SLACK_MESSAGE_MARKER, resetState } from './world.js';
 import { buildTestRunContext } from '../testSupport/runContext.js';
 
 // This first test must run before any resetState() call elsewhere in this file (node's
@@ -89,4 +89,54 @@ test('resetState populates google, glean, and slack sections from RunContext', (
   assert.deepEqual(world.glean.docs, ctx.glean.docs);
   assert.equal(world.slack.signingSecret, ctx.slack.signingSecret);
   assert.deepEqual(world.slack.channels, ctx.slack.channels);
+});
+
+// --- Task 7: Glean indexedDocs + Slack messages/teamName ---------------------------------
+
+test('resetState starts glean.indexedDocs empty, and it is genuinely re-runnable across two activations', () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  assert.deepEqual(activeWorld().glean.indexedDocs, {});
+
+  // Simulate a live indexing call mutating World mid-run (the same thing
+  // platforms/glean/router.ts's indexdocument handler does).
+  activeWorld().glean.indexedDocs['doc-1'] = { id: 'doc-1', datasource: 'x', indexedAt: Date.now() };
+  assert.ok(Object.keys(activeWorld().glean.indexedDocs).length > 0);
+
+  // A second reset (hard constraint 5/6: any scenario re-runnable, no leakage) must wipe
+  // it clean again, not carry the previous run's indexed documents forward.
+  resetState(buildTestRunContext());
+  assert.deepEqual(activeWorld().glean.indexedDocs, {}, 'indexedDocs must not leak across runs');
+});
+
+test('resetState seeds slack.messages deterministically per channel, oldest message last, and mirrors company name into teamName', () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const world = activeWorld();
+
+  assert.equal(world.slack.teamName, ctx.company.name);
+
+  for (const channel of ctx.slack.channels) {
+    const messages = world.slack.messages[channel.id];
+    assert.ok(messages, `channel ${channel.id} must have seeded messages`);
+    assert.ok((messages?.length ?? 0) >= 9, 'at least 9 seeded messages per channel, per buildSlackChannelMessages');
+    assert.equal(messages?.at(-1)?.text, OLDEST_SLACK_MESSAGE_MARKER, 'the last message must be the oldest-message marker');
+  }
+
+  // Same seed => same messages (deterministic, hard constraint: a captured seed
+  // reproduces the exact same run).
+  resetState(buildTestRunContext({ seed: ctx.seed }));
+  const secondWorld = activeWorld();
+  const firstChannel = ctx.slack.channels[0];
+  if (!firstChannel) throw new Error('sanity: fixture must have at least one channel');
+  assert.deepEqual(secondWorld.slack.messages[firstChannel.id], world.slack.messages[firstChannel.id]);
+
+  // A different seed must produce different message content (hard constraint 6: per-run
+  // generation, not the same canned text regenerated every time).
+  resetState(buildTestRunContext({ seed: 'totally-different-seed' }));
+  const thirdWorld = activeWorld();
+  assert.notDeepEqual(
+    thirdWorld.slack.messages[firstChannel.id]?.map((m) => m.text),
+    world.slack.messages[firstChannel.id]?.map((m) => m.text),
+  );
 });

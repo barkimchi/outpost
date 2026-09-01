@@ -418,9 +418,9 @@ test('activeInterceptFault() matches a registered intercept fault by request sha
   }
 });
 
-test('every registered scenario 1-11 builds without throwing, for every scenario in the registry', () => {
+test('every registered scenario 1-15 builds without throwing, for every scenario in the registry', () => {
   // A cheap smoke test: build() must not throw for a real generated RunContext, for
-  // every scenario currently registered (tiers 1-3, through this task).
+  // every scenario currently registered (tiers 1-5, through Task 7).
   const engine = freshEngine();
   try {
     for (const def of scenarioRegistry) {
@@ -430,7 +430,7 @@ test('every registered scenario 1-11 builds without throwing, for every scenario
       assert.ok((payload.steps ?? []).length > 0);
       assert.ok(payload.docsRef.length > 0, `${def.id}: docsRef must be a real, non-empty reference`);
     }
-    assert.equal(scenarioRegistry.length, 11, 'scenarios 1-11 are registered (tiers 1-3)');
+    assert.equal(scenarioRegistry.length, 15, 'scenarios 1-15 are registered (tiers 1-5)');
   } finally {
     engine.dispose();
   }

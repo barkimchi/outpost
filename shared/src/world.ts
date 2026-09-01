@@ -11,6 +11,16 @@
  * Google authorization-code/refresh-token registry, Slack posted-message history, and
  * Glean index state to this file; none of that is churn scenario.ts should carry.
  *
+ * Task 7 additions: `World.glean.indexedDocs` (a runtime registry the indexing endpoints
+ * populate, mirroring the shape of `World.google.issuedTokens`: RunContext's own
+ * `glean.docs` are the company's PRE-EXISTING searchable content, generated once per run;
+ * `indexedDocs` is separate, live state built only by real `POST /indexdocument`/
+ * `/indexdocuments` calls during the run) and `World.slack.messages` (seeded, per-channel
+ * message history for `conversations.history`'s cursor pagination, generated
+ * deterministically from the run's seed by `platforms/world.ts`'s `resetState()`, since
+ * `RunContext.slack.channels` per spec section 8's frozen contract carries no message
+ * content of its own).
+ *
  * World's canonical runtime home is server/src/platforms/world.ts per spec section 4's
  * file tree, but its TYPE has to live here in shared: server already depends on
  * @gym/shared (server/tsconfig.json references ../shared), so a type import in the other
@@ -89,6 +99,34 @@ export interface GoogleRefreshToken {
   revoked: boolean;
 }
 
+/**
+ * One document the Glean indexing mock has actually received via `POST /indexdocument` or
+ * `/indexdocuments` (Task 7), distinct from `World.glean.docs` (the run's PRE-SEEDED,
+ * already-searchable company content). Deliberately minimal: no scenario in this task
+ * asserts on indexing status beyond "a call to indexdocument/indexdocuments with a valid
+ * indexing token and a well-formed document succeeds and the document is retrievable from
+ * getdocumentstatus," which is exactly what these fields support.
+ */
+export interface GleanIndexedDoc {
+  id: string;
+  datasource: string;
+  title?: string;
+  /** Unix ms, `Date.now()` at the moment the indexing call was received. */
+  indexedAt: number;
+}
+
+/** One message in a channel's seeded history (Task 7), oldest-message-last (index 0 is the
+ *  newest), matching real Slack's `conversations.history` default ordering. Generated
+ *  deterministically from the run's seed, not authored per scenario: `t5-envelope-trap`
+ *  reads only the shape (how many exist, which one is oldest), never a literal value. */
+export interface SlackMessage {
+  /** Slack's own message-id convention: a fractional unix-seconds string, e.g.
+   *  "1700000000.000100". Not asserted on by any scenario; present for shape realism. */
+  ts: string;
+  user: string;
+  text: string;
+}
+
 export interface World {
   github: {
     user: { login: string; name: string; email: string; id: number };
@@ -114,12 +152,25 @@ export interface World {
     indexingToken: string;
     datasource: string;
     docs: Array<{ id: string; title: string; body: string }>;
+    /** Keyed by the literal document id (Task 7). Empty at every reset; populated live by
+     *  real indexing calls during the run. */
+    indexedDocs: Record<string, GleanIndexedDoc>;
   };
   slack: {
     botToken: string;
     signingSecret: string;
     teamId: string;
     botUserId: string;
+    /** The run's company name (RunContext.company.name), mirrored here for `auth.test`'s
+     *  response (Task 7): the same cross-platform-identity-reuse precedent
+     *  `platforms/google/router.ts`'s userinfo handler already sets by reading
+     *  `world.github.user` rather than duplicating identity data with no other home. */
+    teamName: string;
     channels: Array<{ id: string; name: string; isMember: boolean }>;
+    /** Keyed by channel id, newest-message-first (Task 7). Seeded deterministically at
+     *  every reset so `conversations.history` has real, reproducible content to page
+     *  through; never mutated by `chat.postMessage` (a posted message is not appended
+     *  back into this seeded history, since no scenario needs it to be). */
+    messages: Record<string, SlackMessage[]>;
   };
 }
