@@ -4,6 +4,8 @@ import type { AddressInfo } from 'node:net';
 import express, { Router } from 'express';
 import { requestLog, emitBodyParserFailureEvent } from './requestLog.js';
 import { bus } from '../bus.js';
+import { createApp } from '../app.js';
+import { engine } from '../engine/engine.js';
 import type { RequestEvent } from '@gym/shared';
 
 function waitForNextRequestEvent(): Promise<RequestEvent> {
@@ -32,6 +34,9 @@ async function listen() {
   const app = express();
   app.use(requestLog);
 
+  // Mounted at a non-/_trainer prefix deliberately: /_trainer is now always skipped by
+  // requestLog (see isTrainerPath in requestLog.ts), so the req.path-gets-stripped-by-
+  // mounting regression below needs a path that still gets logged to prove anything.
   const nested = Router();
   nested.get('/api/health', (_req, res) => {
     // Responds directly without ever calling next(): the same shape as the real
@@ -39,7 +44,7 @@ async function listen() {
     // req.path-gets-stripped-by-mounting bug this test guards against.
     res.json({ ok: true });
   });
-  app.use('/_trainer', nested);
+  app.use('/mock-platform', nested);
 
   app.get('/github/user', (_req, res) => {
     res.status(200).json({ login: 'octocat' });
@@ -49,6 +54,12 @@ async function listen() {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write('data: {}\n\n');
     res.end();
+  });
+
+  // Representative /_trainer control-plane chatter (spec section 6): scenario-state
+  // polling, the exact kind of traffic that used to drown the Logs tab.
+  app.get('/_trainer/api/state', (_req, res) => {
+    res.json({ state: 'idle' });
   });
 
   // Two writes whose combined size lands exactly on the 8KB cap, followed by more data
@@ -85,14 +96,29 @@ async function listen() {
   return { server, port };
 }
 
+/**
+ * Boots the REAL createApp() stack (rawBody -> requestLog -> faultInjector ->
+ * /_trainer -> /github), for the one test below that needs the actual proxy and GitHub
+ * router, not a hand-built stand-in. `engine` is a per-process singleton (Node isolates
+ * each test file into its own process), and this file's other tests never touch it, so
+ * booting it here cannot affect them.
+ */
+async function listenRealApp() {
+  const app = createApp({ production: false });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const { port } = server.address() as AddressInfo;
+  return { server, port };
+}
+
 test('a nested-router request is logged with the full original path, not the router-relative stripped one', async () => {
   const { server, port } = await listen();
   try {
     const eventPromise = waitForNextRequestEvent();
-    const res = await fetch(`http://127.0.0.1:${port}/_trainer/api/health`);
+    const res = await fetch(`http://127.0.0.1:${port}/mock-platform/api/health`);
     assert.equal(res.status, 200);
     const ev = await eventPromise;
-    assert.equal(ev.path, '/_trainer/api/health');
+    assert.equal(ev.path, '/mock-platform/api/health');
   } finally {
     server.close();
   }
@@ -144,18 +170,59 @@ test('a request with no marker header is logged as "external"', async () => {
 test('the SSE route is never logged', async () => {
   const { server, port } = await listen();
   try {
-    let sawSseEvent = false;
-    const onRequest = (ev: RequestEvent): void => {
-      if (ev.path === '/_trainer/events') sawSseEvent = true;
-    };
-    bus.on('request', onRequest);
-    try {
+    const events = await collectRequestEvents(async () => {
       await fetch(`http://127.0.0.1:${port}/_trainer/events`);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      assert.equal(sawSseEvent, false);
-    } finally {
-      bus.off('request', onRequest);
-    }
+    });
+    assert.deepEqual(events, []);
+  } finally {
+    server.close();
+  }
+});
+
+test('the whole /_trainer prefix never emits a RequestEvent: GET /_trainer/api/state produces none', async () => {
+  const { server, port } = await listen();
+  try {
+    const events = await collectRequestEvents(async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/_trainer/api/state`);
+      assert.equal(res.status, 200, 'the request itself must still work; only logging is skipped');
+    });
+    assert.deepEqual(
+      events,
+      [],
+      'trainer control-plane chatter (scenario state polls, health checks, ...) must never ' +
+        'enter the bus, or it evicts real evidence from the 200-entry ring buffer replayed to new SSE clients',
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test('a proxied GitHub call still produces exactly one log event, badged source: "proxy", for the platform path (not the /_trainer envelope)', async () => {
+  engine.boot();
+  const { server, port } = await listenRealApp();
+  try {
+    const events = await collectRequestEvents(async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/_trainer/api/proxy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          method: 'GET',
+          url: `http://127.0.0.1:${port}/github/user`,
+          headers: { authorization: 'Bearer some-token-nobody-generated' },
+        }),
+      });
+      // The proxy envelope itself always 200s (the wrapped platform status lives inside
+      // the JSON body); a 401 from the fake bearer token is expected and irrelevant here.
+      assert.equal(res.status, 200);
+    });
+    assert.equal(
+      events.length,
+      1,
+      'only the inner /github/user request should be logged; the /_trainer/api/proxy envelope must not be',
+    );
+    assert.equal(events[0]?.path, '/github/user');
+    assert.equal(events[0]?.pathLower, '/github/user');
+    assert.equal(events[0]?.source, 'proxy');
   } finally {
     server.close();
   }
@@ -186,17 +253,18 @@ test('root path normalizes to "/" in pathLower, not the empty string', async () 
   }
 });
 
-test('the SSE skip is case-insensitive and trailing-slash tolerant, not just an exact match', async () => {
+test('the /_trainer skip is case-insensitive and trailing-slash tolerant, not just an exact match', async () => {
   const { server, port } = await listen();
   try {
     const events = await collectRequestEvents(async () => {
       await fetch(`http://127.0.0.1:${port}/_TRAINER/events`);
       await fetch(`http://127.0.0.1:${port}/_trainer/events/`);
+      await fetch(`http://127.0.0.1:${port}/_Trainer/Api/State`);
     });
     assert.deepEqual(
       events,
       [],
-      'neither an uppercased nor a trailing-slashed variant of the SSE path should be logged',
+      'uppercased, trailing-slashed, and mixed-case variants of /_trainer paths must all be skipped',
     );
   } finally {
     server.close();

@@ -5,18 +5,29 @@ import type { Platform, RequestEvent } from '@gym/shared';
 
 const BODY_CAP_BYTES = 8 * 1024; // 8KB, spec section 6
 
+const TRAINER_PREFIX = '/_trainer';
+
 /**
- * These two paths are never logged (spec section 6): logging the SSE route would create
- * a feedback loop (the `log` event the stream itself would then have to deliver), and
- * the outer POST to the proxy endpoint is control-plane noise -- the inner proxied
- * request, which re-enters the server as a genuine HTTP request, is logged on its own
- * way through and is the one that actually matters. Matched against `pathLower`
- * (lowercased, trailing slash stripped), not the verbatim path and not content type:
- * `/_TRAINER/events` and `/_trainer/events/` both route to the same handler Express does
- * (routing is case-insensitive), so a case-sensitive, exact-match skip set only holds by
- * accident.
+ * The entire `/_trainer` prefix is control-plane traffic, never logged (spec section 6
+ * originally excluded only `/_trainer/events`, to avoid a feedback loop where logging the
+ * SSE route emits a `log` event the stream itself would then have to deliver, and
+ * `/_trainer/api/proxy`, since the proxy's inner request re-enters the server as its own
+ * genuine HTTP request and is logged on its own way through). Generalized to the whole
+ * prefix after two Critical findings from the frontend review: trainer chatter
+ * (`/_trainer/api/scenarios`, `/_trainer/api/state`, health polls, ...) dominated the
+ * Logs tab and evicted real evidence from the 200-entry ring buffer replayed to every new
+ * SSE client, so a UI-only filter could not have fixed the reconnect payload; and every
+ * `/_trainer/api/*` call the app's own browser makes was badged `EXTERNAL`, the exact
+ * signal Demo mode relies on to mean "this came from real Postman, not this UI", wrong on
+ * most rows. A reviewer verified no scenario matcher targets `/_trainer`, so nothing
+ * breaks. Matched against `pathLower` (lowercased, trailing slash stripped), not the
+ * verbatim path and not content type: `/_TRAINER/events` and `/_trainer/events/` both
+ * route to the same handler Express does (routing is case-insensitive), so a
+ * case-sensitive, exact-match check only holds by accident.
  */
-const SKIP_PATHS = new Set<string>(['/_trainer/events', '/_trainer/api/proxy']);
+function isTrainerPath(pathLower: string): boolean {
+  return pathLower === TRAINER_PREFIX || pathLower.startsWith(`${TRAINER_PREFIX}/`);
+}
 
 /** Marker header trainer/proxy.ts adds to its own outbound calls; see shared `source`. */
 const PROXY_MARKER_HEADER = 'x-postman-gym-proxy';
@@ -124,7 +135,7 @@ export function requestLog(req: Request, res: Response, next: NextFunction): voi
   const capturedPath = req.path;
   const capturedPathLower = toPathLower(capturedPath);
 
-  if (SKIP_PATHS.has(capturedPathLower)) {
+  if (isTrainerPath(capturedPathLower)) {
     next();
     return;
   }
@@ -259,11 +270,20 @@ export function requestLog(req: Request, res: Response, next: NextFunction): voi
  * error from somewhere other than an actual body-parser failure (which would mean
  * requestLog DID already run and will emit its own event when the response completes)
  * cannot double-emit for the same request.
+ *
+ * Also skips the whole `/_trainer` prefix, same as requestLog()'s isTrainerPath check
+ * above: a malformed envelope POSTed straight to `/_trainer/api/proxy` (rather than a
+ * malformed body forwarded THROUGH the proxy to a platform endpoint, which is a
+ * different, still-logged request against the platform path) is control-plane noise,
+ * not evidence. The realistic malformed-body lesson (t4-malformed-body) is solved by
+ * sending invalid JSON as the platform request's body, which the proxy forwards as a
+ * fresh, separately-logged inbound request to the platform path, not to `/_trainer`.
  */
 export function emitBodyParserFailureEvent(req: Request, res: Response, resBodyJson: string): void {
-  if (alreadyEmitted(res)) return;
-
   const pathLower = toPathLower(req.path);
+  if (isTrainerPath(pathLower)) return;
+
+  if (alreadyEmitted(res)) return;
 
   let reqBody: string | null = null;
   let reqBodyTruncated = false;

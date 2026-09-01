@@ -140,7 +140,60 @@ test('outside production, the static/SPA fallback is not mounted at all', async 
   }
 });
 
-test('a malformed JSON body, through the real app wiring, still gets a correct 400 AND emits exactly one RequestEvent', async () => {
+test('a learner\'s malformed JSON body, sent to a real platform path through the real app wiring, still gets a correct 400 AND emits exactly one RequestEvent', async () => {
+  // A learner's malformed body always lands on a platform path (either sent straight to
+  // /github/... by real Postman/curl, or forwarded there as the proxy's inner request).
+  // That is the traffic hard constraint 9 protects: a correct 400 must never mean total
+  // engine silence. POST /github/user/repos is a real platform endpoint that reads a JSON
+  // body, so this is representative of the actual learner-facing failure, not a synthetic
+  // stand-in.
+  const webDistDir = await emptyTempDir();
+  const { server, port } = await listen(webDistDir);
+  try {
+    const seen: RequestEvent[] = [];
+    const onRequest = (ev: RequestEvent): void => {
+      seen.push(ev);
+    };
+    bus.on('request', onRequest);
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/github/user/repos`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{not valid json',
+      });
+      assert.equal(res.status, 400);
+      const body = (await res.json()) as { error: string };
+      assert.equal(body.error, 'Bad Request');
+
+      // Give the bus a moment; the event is emitted synchronously inside the error
+      // handler, but this keeps the assertion robust either way.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      assert.equal(
+        seen.length,
+        1,
+        'rawBody mounts above requestLog, so a malformed body on a real platform path used to reach the ' +
+          'error handler with total engine silence (hard constraint 9)',
+      );
+      assert.equal(seen[0]?.status, 400);
+      assert.equal(seen[0]?.path, '/github/user/repos');
+      assert.equal(seen[0]?.pathLower, '/github/user/repos');
+      assert.equal(seen[0]?.method, 'POST');
+    } finally {
+      bus.off('request', onRequest);
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test('a malformed /_trainer/api/proxy envelope (our own UI\'s bug, not a learner action) still gets a correct 400 to the caller but emits ZERO RequestEvents', async () => {
+  // A malformed /_trainer/api/proxy envelope is trainer control-plane chatter, not
+  // evidence of a learner's attempt: the realistic malformed-body lesson is solved by
+  // sending invalid JSON as the platform request's body (the test above), which the proxy
+  // forwards as a fresh, separately-logged inbound request to the platform path. A bad
+  // envelope straight to /_trainer/api/proxy itself must stay silent, same as the rest of
+  // /_trainer.
   const webDistDir = await emptyTempDir();
   const { server, port } = await listen(webDistDir);
   try {
@@ -159,19 +212,14 @@ test('a malformed JSON body, through the real app wiring, still gets a correct 4
       const body = (await res.json()) as { error: string };
       assert.equal(body.error, 'Bad Request');
 
-      // Give the bus a moment; the event is emitted synchronously inside the error
-      // handler, but this keeps the assertion robust either way.
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       assert.equal(
         seen.length,
-        1,
-        'rawBody mounts above requestLog, so this used to reach the error handler with total engine silence',
+        0,
+        'a malformed /_trainer/api/proxy envelope is our own UI\'s bug, not a learner action; it must stay ' +
+          'silent even though the caller still gets a correct 400',
       );
-      assert.equal(seen[0]?.status, 400);
-      assert.equal(seen[0]?.path, '/_trainer/api/proxy');
-      assert.equal(seen[0]?.pathLower, '/_trainer/api/proxy');
-      assert.equal(seen[0]?.method, 'POST');
     } finally {
       bus.off('request', onRequest);
     }
