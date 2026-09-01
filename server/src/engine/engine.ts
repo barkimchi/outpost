@@ -206,6 +206,14 @@ export class Engine {
     this.validateClearFaults(def.id, built);
     const world = activeWorld();
 
+    // Apply `setup` before faults are registered (docs/SPEC.md section 9: "def.build(ctx)
+    // -> apply setup -> register faults"). Task 6 fix: this call was missing entirely
+    // through Task 3's build and both its fix rounds; every scenario shipped so far
+    // passed `setup: []`, so the gap was silent. `t3-token-expiry` is the first scenario
+    // to rely on it (overriding `accessTokenTtlSec` for that one scenario only, without
+    // touching `generate()`'s baseline), so this had to be fixed before it could work.
+    for (const setupFn of built.setup) setupFn(world);
+
     const faultsById = new Map<string, Fault>();
     for (const fault of built.faults) faultsById.set(fault.id, fault);
 

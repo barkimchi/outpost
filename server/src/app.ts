@@ -7,6 +7,7 @@ import { requestLog, emitBodyParserFailureEvent } from './middleware/requestLog.
 import { faultInjector } from './middleware/faultInjector.js';
 import { createTrainerRouter } from './trainer/router.js';
 import { createGithubRouter } from './platforms/github/router.js';
+import { createGoogleRouter } from './platforms/google/router.js';
 
 /**
  * MOUNT ORDER LIVES HERE. This is the load-bearing part of the whole project
@@ -25,7 +26,8 @@ import { createGithubRouter } from './platforms/github/router.js';
  *   4. /_trainer         trainer router: health, proxy, SSE now; scenarios API, workspace,
  *                        docs, OAuth callback land here in later tasks.
  *   5. platform routers  /github /google /glean /slack (healthy behavior only). /github
- *                        lands in Task 2; /google /glean /slack are not mounted yet.
+ *                        lands in Task 2, /google in Task 6; /glean /slack are not
+ *                        mounted yet.
  *   6. static            web/dist + SPA fallback, PROD ONLY (spec section 6 step 6).
  *                        The platform-prefix guard runs before express.static, not after:
  *                        a request for /github/... etc. must never be answered by a
@@ -76,10 +78,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // --- 4. /_trainer ---
   app.use('/_trainer', createTrainerRouter());
 
-  // --- 5. platform routers (/github now; /google /glean /slack land in later tasks) ---
+  // --- 5. platform routers (/github, /google now; /glean /slack land in later tasks) ---
   app.use('/github', createGithubRouter());
-  // /google /glean /slack are not mounted yet: requests to those prefixes fall through
-  // to step 6's guard (which never serves them) and then to the 404 handler in step 7.
+  app.use('/google', createGoogleRouter());
+  // /glean /slack are not mounted yet: requests to those prefixes fall through to step
+  // 6's guard (which never serves them) and then to the 404 handler in step 7.
 
   // --- 6. static web/dist + SPA fallback (prod only) ---
   if (production) {

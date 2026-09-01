@@ -26,15 +26,16 @@ async function listen() {
   return { server, port };
 }
 
-test('GET /_trainer/api/scenarios lists all seven registered scenarios with solved:false, runs:0 before any activation', async () => {
+test('GET /_trainer/api/scenarios lists all registered scenarios (tiers 1-3) with solved:false, runs:0 before any activation', async () => {
   const { server, port } = await listen();
   try {
     const res = await fetch(`http://127.0.0.1:${port}/_trainer/api/scenarios`);
     assert.equal(res.status, 200);
     const body = (await res.json()) as Array<{ id: string; solved: boolean }>;
-    assert.equal(body.length, 7);
+    assert.equal(body.length, 11);
     assert.ok(body.some((s) => s.id === 't1-wrong-method'));
     assert.ok(body.some((s) => s.id === 't2-rate-limit'));
+    assert.ok(body.some((s) => s.id === 't3-insufficient-scope'));
   } finally {
     server.close();
   }

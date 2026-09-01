@@ -35,18 +35,51 @@ export interface GithubTokenRecord {
 }
 
 /**
- * One access token the Google OAuth mock has issued. Placeholder shape (Task 2 fix
- * round): the brief for this task said token registries live in World, and google's
- * section only held static client config, no issued-token registry at all. Left empty
- * and unpopulated until Task 6 builds the OAuth mock and its authorization-code /
- * refresh-token registries alongside it; this establishes the pattern (keyed by the
- * literal token string, mirroring GithubTokenRecord) without guessing at fields Task 6
- * has not designed yet.
+ * One access token the Google OAuth mock has issued. Originally a placeholder (Task 2 fix
+ * round) establishing the keyed-by-literal-token-string pattern (mirroring
+ * GithubTokenRecord) before Task 6 designed the real fields. Now populated by Task 6's
+ * `platforms/google/oauth.ts`.
  */
 export interface GoogleIssuedToken {
   scopes: string[];
   /** Unix seconds. */
   expiresAt: number;
+  /**
+   * The refresh token minted in the same grant as this access token, if any (Task 6).
+   * Lets `POST /google/oauth2/revoke` cascade: real Google's revoke endpoint invalidates
+   * the WHOLE grant when handed either half of it, not just the literal token string
+   * passed in, so revoking an access token must also revoke its paired refresh token.
+   */
+  pairedRefreshToken?: string;
+}
+
+/**
+ * One authorization code the Google OAuth mock has issued (Task 6, docs/SPEC.md section
+ * 11: "Codes are single-use, 60s TTL"). `redirectUri` is the exact URI the code was
+ * issued against: `POST /oauth2/token`'s `redirect_uri` must match it exactly, or the
+ * exchange fails with `redirect_uri_mismatch` rather than `invalid_grant` (real Google's
+ * distinction between the two errors, matched here). `used` enforces single-use: a second
+ * exchange attempt with the same code, even before it expires, is `invalid_grant`.
+ */
+export interface GoogleAuthCode {
+  redirectUri: string;
+  scopes: string[];
+  /** Unix seconds. */
+  expiresAt: number;
+  used: boolean;
+}
+
+/**
+ * One refresh token the Google OAuth mock has issued (Task 6). Refresh tokens are not
+ * rotated on use (matching real Google's default behavior): a `grant_type=refresh_token`
+ * exchange reuses the same refresh token string and mints a new access token with the
+ * SAME scopes this record was issued with. This is exactly why `t3-insufficient-scope`
+ * cannot be fixed by refreshing: refreshing never changes `scopes`, only a brand new
+ * consent (a fresh authorization code requesting the added scope) can.
+ */
+export interface GoogleRefreshToken {
+  scopes: string[];
+  revoked: boolean;
 }
 
 export interface World {
@@ -63,8 +96,23 @@ export interface World {
     grantedScopes: string[];
     requestedScopes: string[];
     accessTokenTtlSec: number;
-    /** Keyed by the literal access token string. Empty until Task 6 populates it. */
+    /** Keyed by the literal access token string. */
     issuedTokens: Record<string, GoogleIssuedToken>;
+    /** Keyed by the literal authorization code string (Task 6). */
+    authCodes: Record<string, GoogleAuthCode>;
+    /** Keyed by the literal refresh token string (Task 6). */
+    refreshTokens: Record<string, GoogleRefreshToken>;
+    /**
+     * One-shot switch (Task 6, `t3-revoked-refresh`): when true, the NEXT
+     * `authorization_code` grant this run mints a refresh token that is already
+     * `revoked: true`, then flips this back to false. Models "ops rotated the refresh
+     * token before the integration ever got to use it" without needing a timer or a
+     * second live request: the learner's fix is a genuinely new `authorization_code`
+     * grant (this flag having already been consumed), never a `refresh_token` grant
+     * against the dead one, matching the curriculum's "diagnose invalid_grant and
+     * re-auth" (not "diagnose invalid_grant and retry the same refresh").
+     */
+    revokeNextRefreshToken: boolean;
   };
   glean: {
     instance: string;

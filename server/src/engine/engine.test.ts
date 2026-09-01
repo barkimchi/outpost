@@ -418,9 +418,9 @@ test('activeInterceptFault() matches a registered intercept fault by request sha
   }
 });
 
-test('every registered scenario 1-7 builds without throwing, for every scenario in the registry', () => {
+test('every registered scenario 1-11 builds without throwing, for every scenario in the registry', () => {
   // A cheap smoke test: build() must not throw for a real generated RunContext, for
-  // every scenario currently registered (all seven from this task).
+  // every scenario currently registered (tiers 1-3, through this task).
   const engine = freshEngine();
   try {
     for (const def of scenarioRegistry) {
@@ -429,7 +429,7 @@ test('every registered scenario 1-7 builds without throwing, for every scenario 
       assert.ok(payload.ticketMd.length > 0);
       assert.ok((payload.steps ?? []).length > 0);
     }
-    assert.equal(scenarioRegistry.length, 7, 'this task ships exactly scenarios 1-7');
+    assert.equal(scenarioRegistry.length, 11, 'scenarios 1-11 are registered (tiers 1-3)');
   } finally {
     engine.dispose();
   }
@@ -501,6 +501,76 @@ test('getState().attemptHint is undefined for a step that defines none', () => {
   try {
     engine.activate('fake-no-hint');
     assert.equal(engine.getState().attemptHint, undefined);
+  } finally {
+    engine.dispose();
+  }
+});
+
+// --- Task 6 fix: `built.setup` was authored by BuiltScenario but never invoked anywhere
+// in activateDef(). Silent because every scenario through Task 3's two fix rounds passed
+// `setup: []`; t3-token-expiry (Task 6) is the first to rely on it. ---------------------
+
+test('built.setup mutations apply to the World before the first request arrives', () => {
+  const fakeDef: ScenarioDef = {
+    id: 'fake-with-setup',
+    tier: 3,
+    track: 'troubleshoot',
+    title: 'fake',
+    platform: 'google',
+    docsRef: [],
+    build(_ctx: RunContext) {
+      return {
+        ticketMd: 'x',
+        setup: [(w) => { w.google.accessTokenTtlSec = 15; }],
+        faults: [],
+        steps: [],
+        hints: [],
+        solutionMd: 'x',
+      };
+    },
+  };
+  const engine = freshEngine([fakeDef]);
+  try {
+    engine.activate('fake-with-setup');
+    assert.equal(activeWorld().google.accessTokenTtlSec, 15, 'setup() must run before the World is handed to the first request');
+  } finally {
+    engine.dispose();
+  }
+});
+
+test('built.setup runs before faults are applied, so a fault can see setup-mutated state', () => {
+  const order: string[] = [];
+  const fault: Fault = {
+    id: 'fake-fault-after-setup',
+    kind: 'state',
+    apply(w) {
+      order.push('fault');
+      // Proves setup already ran: reads a value only setup() would have written.
+      assert.equal(w.google.accessTokenTtlSec, 15);
+    },
+  };
+  const fakeDef: ScenarioDef = {
+    id: 'fake-setup-then-fault',
+    tier: 3,
+    track: 'troubleshoot',
+    title: 'fake',
+    platform: 'google',
+    docsRef: [],
+    build(_ctx: RunContext) {
+      return {
+        ticketMd: 'x',
+        setup: [(w) => { order.push('setup'); w.google.accessTokenTtlSec = 15; }],
+        faults: [fault],
+        steps: [],
+        hints: [],
+        solutionMd: 'x',
+      };
+    },
+  };
+  const engine = freshEngine([fakeDef]);
+  try {
+    engine.activate('fake-setup-then-fault');
+    assert.deepEqual(order, ['setup', 'fault']);
   } finally {
     engine.dispose();
   }

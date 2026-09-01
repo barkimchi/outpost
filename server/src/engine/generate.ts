@@ -175,6 +175,19 @@ const GLEAN_DOC_POOL: Array<{ title: string; body: (company: string) => string }
 
 const SCOPE_EXTRAS = ['workflow', 'gist', 'user:email'];
 
+// Task 6: keys only, resolved to real strings (which need the live PORT) by
+// `platforms/google/oauth.ts`. See the `wrongRedirectVariant` comment below.
+const WRONG_REDIRECT_VARIANTS = [
+  'pstmn-trailing-slash',
+  'pstmn-http',
+  'pstmn-no-v1',
+  'localhost-127',
+  'localhost-trailing-slash',
+  'localhost-no-trainer-prefix',
+] as const;
+
+const INSUFFICIENT_SCOPE_VARIANTS = ['missing', 'decoy'] as const;
+
 const GOOGLE_SCOPES = [
   'openid',
   'email',
@@ -260,6 +273,23 @@ export function generate(seed: string): RunContext {
   // not just which of the two tokens is missing it.
   const missingScopeVariant: 'org' | 'notifications' = rng.bool(0.5) ? 'org' : 'notifications';
 
+  // Task 6, spec hard constraint 7a ("randomize ... which redirect URI is wrong"):
+  // t3-redirect-mismatch's ticket shows the OAuth helper's CURRENT (wrong) callback URL
+  // as one of six near-miss decoys, each a plausible copy-paste mistake against one of
+  // the two genuinely registered URIs (trailing slash, http instead of https, a dropped
+  // path segment, 127.0.0.1 instead of localhost, ...). Resolved to an actual string by
+  // `platforms/google/oauth.ts`'s `resolveWrongRedirectUri()`, which needs the live PORT
+  // and so cannot live in this file (generate.ts stays config-free and pure).
+  const wrongRedirectVariant = rng.pick(WRONG_REDIRECT_VARIANTS);
+
+  // Task 6: t3-insufficient-scope's ticket shows the OAuth helper's CURRENT (insufficient)
+  // scope configuration two different ways so the fix is never "always add the same
+  // missing scope to a list that already looks complete": either the calendar scope is
+  // simply absent, or a real, distinct, calendar-adjacent Google scope
+  // (calendar.events, which does not cover reading the calendar list) is present in its
+  // place, plausible enough to read as "probably fine" without a careful diff.
+  const insufficientScopeVariant = rng.pick(INSUFFICIENT_SCOPE_VARIANTS);
+
   const channelNames = rng.pickN(CHANNEL_NAME_POOL, rng.int(3, 5));
   const channels = channelNames.map((name) => ({
     id: `C${rng.token(9, UPPER_ALNUM)}`,
@@ -320,6 +350,8 @@ export function generate(seed: string): RunContext {
       targetRepo: targetRepoEntry.name,
       brokenCredentialSlot,
       missingScopeVariant,
+      wrongRedirectVariant,
+      insufficientScopeVariant,
     },
   };
 }

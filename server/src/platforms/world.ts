@@ -39,8 +39,14 @@ export function resetState(ctx: RunContext): void {
       grantedScopes: [...ctx.google.grantedScopes],
       requestedScopes: [...ctx.google.requestedScopes],
       accessTokenTtlSec: ctx.google.accessTokenTtlSec,
-      // Empty until Task 6 builds the OAuth mock and issues real tokens into it.
+      // Empty baseline: populated live as `platforms/google/oauth.ts` issues codes and
+      // tokens during the run (Task 6). A scenario's `setup` may pre-populate any of
+      // these three registries before the first request ever arrives (e.g.
+      // `t3-revoked-refresh` hands over an already-issued, already-dead refresh token).
       issuedTokens: {},
+      authCodes: {},
+      refreshTokens: {},
+      revokeNextRefreshToken: false,
     },
     glean: {
       instance: ctx.glean.instance,
