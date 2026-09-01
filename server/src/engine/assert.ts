@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { Assertion, RequestEvent } from '@gym/shared';
+import { activeWorld } from '../platforms/world.js';
 
 /**
  * `Assertion` evaluation (docs/SPEC.md section 8, section 9). Every assertion returns a
@@ -275,11 +276,13 @@ export function evaluateAssertions(
  * engine/assert.ts against a small registry"). Empty through scenarios 1-7, which are all
  * expressible with the declarative kinds.
  *
- * `t6-refresh-grant-diagnosis` (Task 8): `t6-capstone`'s step 3 needs to read a
- * `grant_type` field off a form-encoded (`application/x-www-form-urlencoded`) request
- * body, which none of the declarative kinds can do (`reqJsonPath` only parses JSON). See
- * that entry's own comment below for the full reasoning, including why the distinction it
- * makes is load-bearing for hard constraint 9, not cosmetic.
+ * `t6-refresh-grant-success` / `t6-refresh-grant-diagnosis` (Task 8, fix round): both
+ * `t6-capstone` steps need to read a `grant_type` field off a form-encoded
+ * (`application/x-www-form-urlencoded`) request body, which none of the declarative kinds
+ * can do (`reqJsonPath` only parses JSON). See each entry's own comment below for the full
+ * reasoning, including why the distinctions they make (grant type, and, for the diagnosis
+ * one, that the token was genuinely issued this run) are load-bearing for hard constraint
+ * 9, not cosmetic.
  *
  * `t3-redirect-progress` (Task 6 fix round, finding 1): `t3-redirect-mismatch`'s step 1
  * matches BOTH `GET` and `POST /google/o/oauth2/v2/auth`, because the wrong-URI failure
@@ -345,6 +348,19 @@ export const customAssertions: Record<string, CustomAssertion> = {
         reason: `this step wants a grant_type=refresh_token attempt, got grant_type=${grantType ?? '(none)'}`,
       };
     }
+    // Fix round finding 1 (CRITICAL): a completely made-up refresh_token also 400s
+    // invalid_grant, via oauth.ts's `!record` branch, not its `record.revoked` branch. Proven
+    // live: `refresh_token=1//totally-made-up` false-passed this step with zero attempts
+    // before this check existed. The learner must have sent a token this run actually
+    // issued, so the failure genuinely diagnoses a REAL revocation, not a typo that happens
+    // to fail the same way.
+    const refreshToken = params.get('refresh_token') ?? '';
+    if (!Object.prototype.hasOwnProperty.call(activeWorld().google.refreshTokens, refreshToken)) {
+      return {
+        pass: false,
+        reason: 'that refresh_token was never actually issued this run; a made-up value also 400s invalid_grant, but that does not diagnose the real one',
+      };
+    }
     if (ev.status !== 400) {
       return { pass: false, reason: `expected status 400 on the refresh attempt, got ${ev.status}` };
     }
@@ -355,6 +371,36 @@ export const customAssertions: Record<string, CustomAssertion> = {
         pass: false,
         reason: `expected error "invalid_grant" on the refresh attempt, got ${JSON.stringify(errorField)}`,
       };
+    }
+    return { pass: true };
+  },
+
+  /**
+   * `t6-refresh-grant-success` (Task 8 fix round, finding 4: the capstone's step 3, "the
+   * first refresh genuinely works"). Same form-encoded-body problem as
+   * `t6-refresh-grant-diagnosis` above (`reqJsonPath` cannot read `grant_type` off this
+   * endpoint), and the same false-pass risk in the other direction: a learner who instead
+   * ran a whole fresh consent + `grant_type=authorization_code` exchange at this point
+   * would ALSO get `{status:200, access_token: "..."}`, without ever having exercised the
+   * refresh grant this step exists to prove healthy. Checked first, same as the diagnosis
+   * assertion.
+   */
+  't6-refresh-grant-success': (ev) => {
+    const params = new URLSearchParams(ev.reqBody ?? '');
+    const grantType = params.get('grant_type');
+    if (grantType !== 'refresh_token') {
+      return {
+        pass: false,
+        reason: `this step wants a grant_type=refresh_token attempt, got grant_type=${grantType ?? '(none)'}`,
+      };
+    }
+    if (ev.status !== 200) {
+      return { pass: false, reason: `expected status 200 on the refresh attempt, got ${ev.status}` };
+    }
+    const parsed = parseJson(ev.resBody);
+    const accessToken = parsed.ok ? (parsed.value as { access_token?: unknown } | null)?.access_token : undefined;
+    if (typeof accessToken !== 'string' || accessToken === '') {
+      return { pass: false, reason: 'expected a real access_token in the response body' };
     }
     return { pass: true };
   },

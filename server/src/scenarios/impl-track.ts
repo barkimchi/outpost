@@ -46,25 +46,25 @@ import { BASELINE_GOOGLE_SCOPES, POSTMAN_INTERCEPT_REDIRECT_URI, trainerCallback
  * documents, channel set, and every credential differ on every activation
  * (`impl-track.test.ts`, `DISTRIBUTION_TEST_RUNS >= 14`).
  *
- * ## impl-glean's design, and why it never touches `platforms/glean/**`
+ * ## impl-glean's design (fix round): a NEW document, never a seeded one
  *
  * docs/SPEC.md section 12 describes impl-glean as "index the generated documents, verify
- * they come back from search." In this mock, `POST /api/index/v1/indexdocument(s)`
- * writes into `World.glean.indexedDocs`, a registry `GET /getdocumentstatus` reads;
- * `POST /rest/api/v1/search` reads a SEPARATE registry, `World.glean.docs`, the run's
- * pre-seeded, already-searchable company content (`platforms/glean/router.ts`, out of
- * this task's scope; confirmed by reading it, not assumed). The two registries are not
- * wired together, so indexing a document does not, in this mock, make IT SPECIFICALLY
- * turn up in a later search call. Rather than reach into a platform file outside this
- * task's assigned scope to wire that up, `impl-glean` below is honest about the boundary:
- * step 1 indexes the company's documents (graded via a real indexing call succeeding),
- * step 2 confirms the index genuinely picked up what was just sent (`getdocumentstatus`,
- * which DOES read what step 1 wrote, a real, causally-connected check), and step 3 is a
- * separate, independently true proof point that the client-token search path also works,
- * over the run's pre-seeded content, reinforcing tier 4's own "two separate tokens"
- * lesson rather than re-asserting a causal link this mock does not actually implement.
- * The ticket does not claim indexing and search are the same pipeline; it asks for both
- * to be proven working, which is what a real go-live checklist would want regardless.
+ * they come back from search." A concurrent fix round (out of this task's scope) landed
+ * `platforms/glean/router.ts`'s `allSearchableDocs()`, which now genuinely wires indexing
+ * into search: both `POST /rest/api/v1/search` and `GET /api/index/v1/getdocumentstatus`
+ * read the SAME pool, seeded corpus (`World.glean.docs`) first, live-indexed documents
+ * (`World.glean.indexedDocs`) upserted on top. This makes the real round trip possible for
+ * the first time, but it also means a SEEDED document (part of the company's existing,
+ * pre-run content) reports `"status": "INDEXED"` and turns up in search from the moment
+ * the run starts, with nothing indexed. The original version of this scenario graded
+ * `ctx.glean.docs[0]`, a seeded id: steps 2 and 3 were both satisfiable with step 1 doing
+ * nothing at all (caught live, task-8 fix round finding 2). The fix hands the learner a
+ * document this scenario mints itself, `launch-readiness-checklist`, provably absent from
+ * the seeded pool: `step-2`'s matcher is pinned to that exact id (`queryIncludes`), so a
+ * stray query against a seeded doc's id cannot satisfy it either, and step 3 additionally
+ * requires the search RESULT body to contain that id (`bodyMatches`), not merely that
+ * something, anything, matched a broad query. Both checks can only pass once step 1's
+ * indexing call has genuinely happened this run.
  */
 
 function googleCallbackUrlLines(): string {
@@ -232,6 +232,8 @@ using the client id and secret above and the exact same \`redirect_uri\`, then c
 
 // --- impl-glean ------------------------------------------------------------------------------
 
+const NEW_DOC_ID = 'launch-readiness-checklist';
+
 const implGlean: ScenarioDef = {
   id: 'impl-glean',
   tier: 4,
@@ -240,24 +242,22 @@ const implGlean: ScenarioDef = {
   platform: 'glean',
   docsRef: ['glean'],
   build(ctx: RunContext) {
-    const primaryDoc = ctx.glean.docs[0];
-    if (!primaryDoc) throw new Error('impl-glean: doc list was unexpectedly empty');
-    const docLines = ctx.glean.docs.map((doc) => `- \`${doc.id}\` ("${doc.title}")`).join('\n');
+    const docTitle = `${ctx.company.name} Launch Readiness Checklist`;
+    const docBody = `Final launch readiness checklist for ${ctx.company.name}, published today and not yet part of the search index.`;
 
     const ticketMd = `
 ## Ticket
 
-${ctx.company.name} wants its internal knowledge base connected to Glean for the first
-time. Index the documents below under the company's own datasource, confirm the index
-actually picked them up, and confirm employees can already find company content through
-search.
+${ctx.company.name} just published a new internal document and wants it connected to
+Glean for the first time. Index it under the company's own datasource, confirm the index
+actually picked it up, and confirm employees can find it through search.
 
 Glean instance: \`${ctx.glean.instance}\`
 Indexing token: \`${ctx.glean.indexingToken}\`
 Search token: \`${ctx.glean.clientToken}\`
 Datasource: \`${ctx.glean.datasource}\`
-Documents:
-${docLines}
+Document: \`${NEW_DOC_ID}\` ("${docTitle}")
+Content: "${docBody}"
 `.trim();
 
     return {
@@ -267,51 +267,67 @@ ${docLines}
       steps: [
         {
           id: 'step-1',
-          title: 'Index the documents',
+          title: 'Index the document',
           match: { method: 'POST', pathPattern: '^/glean/api/index/v1/indexdocuments?$' },
           assertions: [{ kind: 'status', equals: 200 }],
-          attemptHint: 'Use the indexing token, not the client token. The Docs tab covers the request body either indexing endpoint needs.',
+          attemptHint:
+            'Use the indexing token, not the search token. The Docs tab covers the request body either indexing endpoint needs, including the optional body/text field.',
         },
         {
           id: 'step-2',
           title: 'Confirm the index picked it up',
-          match: { method: 'GET', pathPattern: '^/glean/api/index/v1/getdocumentstatus$' },
+          match: {
+            method: 'GET',
+            pathPattern: '^/glean/api/index/v1/getdocumentstatus$',
+            // Pinned to THIS document's id, not any query to this endpoint: a seeded
+            // (pre-existing) document already reports "INDEXED" from the moment the run
+            // starts (platforms/glean/router.ts's allSearchableDocs(), a concurrent fix
+            // round, out of this task's scope), so this step must never be satisfiable by
+            // querying one of those instead. See this file's header comment.
+            queryIncludes: { id: NEW_DOC_ID },
+          },
           assertions: [
             { kind: 'status', equals: 200 },
             { kind: 'jsonPath', path: 'status', equals: 'INDEXED' },
           ],
-          attemptHint: `Query id=${primaryDoc.id} and datasource=${ctx.glean.datasource}, the exact pair you just indexed.`,
+          attemptHint: `Query id=${NEW_DOC_ID} and datasource=${ctx.glean.datasource}, the exact pair you just indexed.`,
         },
         {
           id: 'step-3',
-          title: 'Confirm company content is searchable',
+          title: 'Confirm the new document is searchable',
           match: { method: 'POST', pathPattern: '^/glean/rest/api/v1/search$' },
           assertions: [
             { kind: 'status', equals: 200 },
             { kind: 'jsonArrayLength', path: 'results', min: 1 },
+            // Requires the RESULT body to actually contain this document's id, not merely
+            // that something, anything, matched a broad query: the seeded corpus is
+            // searchable from the start, so "results.length >= 1" alone proves nothing
+            // about whether this specific document ever got indexed.
+            { kind: 'bodyMatches', matches: escapeRegex(NEW_DOC_ID) },
           ],
-          attemptHint: 'Search needs the client token, not the indexing token: they are two separate credentials, and neither works on the other endpoint.',
+          attemptHint: `Search using the search token for a real word from "${docTitle}" (not an unrelated term): a query that already matched something before you indexed anything proves nothing about your own document.`,
         },
       ],
       hints: [
-        'The Docs tab lists the exact body shape each indexing endpoint requires, including which fields are required.',
-        `getdocumentstatus reports on exactly the id/datasource pair you query, e.g. id=${primaryDoc.id}, datasource=${ctx.glean.datasource}.`,
-        'The search endpoint only accepts the client token. A 401 there with an otherwise-valid-looking token usually means the wrong kind was sent.',
+        'The Docs tab lists the exact body shape each indexing endpoint requires, including which fields are optional.',
+        `getdocumentstatus reports on exactly the id/datasource pair you query: id=${NEW_DOC_ID}, datasource=${ctx.glean.datasource}.`,
+        `The search endpoint only accepts the search token. Query a distinctive word from "${docTitle}" and check the result actually names ${NEW_DOC_ID}, not just that some result came back.`,
       ],
       solutionMd: `
 ## Root cause
 
-Nothing was broken here; this is a first-time connection, not a repair. Indexing and
-search are two separate systems behind two separate credentials in this mock, so
-"indexed successfully" and "searchable" are two different things worth confirming
-independently, the same way they would be in a real rollout.
+Nothing was broken here; this is a first-time connection, not a repair. Indexing a new
+document and confirming it is genuinely searchable are two separate things worth proving
+independently, the same way they would be in a real rollout: this mock's own pre-existing
+company content was already searchable before anything was indexed, so a generic "did
+something match" check would have proven nothing about THIS document specifically.
 
 ## Fix
 
-\`POST /api/index/v1/indexdocuments\` (or \`/indexdocument\` per document) with the
-indexing token and the documents above, confirm with \`GET /api/index/v1/
-getdocumentstatus\` that the index actually has them, and confirm
-\`POST /rest/api/v1/search\` with the client token returns real results.
+\`POST /api/index/v1/indexdocuments\` (or \`/indexdocument\`) with the indexing token and
+\`${NEW_DOC_ID}\`, confirm with \`GET /api/index/v1/getdocumentstatus?id=${NEW_DOC_ID}\`
+that the index genuinely has it, and confirm \`POST /rest/api/v1/search\` with the search
+token returns it by name.
 `.trim(),
     };
   },

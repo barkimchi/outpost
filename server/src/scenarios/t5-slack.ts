@@ -136,7 +136,11 @@ const t5HmacSignature: ScenarioDef = {
   track: 'troubleshoot',
   title: 'Slack webhook signature verification',
   platform: 'slack',
-  docsRef: ['slack'],
+  // 'scripting' added (Task 8 fix round, finding 5): this is the one scenario where a
+  // Pre-request script computing the signature (content/docs/scripting.md's own worked
+  // example is this exact signature) is a genuinely useful path, and it was the only
+  // registered doc with zero scenario referencing it at all.
+  docsRef: ['slack', 'scripting'],
   build(ctx: RunContext) {
     const ticketMd = `
 ## Ticket

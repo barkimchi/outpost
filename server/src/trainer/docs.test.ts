@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createApp } from '../app.js';
 import { getDoc, listDocs } from '../content/index.js';
+import { scenarioRegistry } from '../scenarios/index.js';
 
 /**
  * Docs tab endpoints (docs/SPEC.md section 10): `GET /_trainer/api/docs`,
@@ -46,6 +47,28 @@ test('content/index.ts: getDoc reads real, non-stub markdown for every registere
     // A guard against a lorem-ipsum placeholder ever landing here quietly: real reference
     // content for a whole platform's auth model and endpoint list runs well past 200 chars.
     assert.ok((doc?.md.length ?? 0) > 200, `${summary.id} doc should have real content, not a stub`);
+  }
+});
+
+test('every scenario\'s docsRef resolves to a real registered doc id, and every registered doc is referenced by at least one scenario (Task 8 fix round, finding 5)', () => {
+  const registeredIds = new Set(listDocs().map((d) => d.id));
+  const referencedIds = new Set<string>();
+  for (const def of scenarioRegistry) {
+    for (const docId of def.docsRef) {
+      assert.ok(
+        registeredIds.has(docId),
+        `${def.id}'s docsRef references "${docId}", which content/index.ts does not register`,
+      );
+      referencedIds.add(docId);
+    }
+  }
+  // The other direction: content/index.ts claims every registered doc exists to be
+  // solvable from (this task's own header comment); a doc with zero consumers is exactly
+  // the authored-but-unread pattern hard constraint 7b exists to catch. Would fail if
+  // t5-slack.ts's t5-hmac-signature ever dropped 'scripting' from its docsRef again,
+  // since nothing else references it.
+  for (const id of registeredIds) {
+    assert.ok(referencedIds.has(id), `doc "${id}" is registered but no scenario's docsRef references it`);
   }
 });
 

@@ -33,14 +33,21 @@ query) plus `trackingToken` and `requestID`.
 
 ### Indexing
 
-- `POST /api/index/v1/indexdocument`: body `{ "document": { "id": "...", "datasource": "...", "title": "..." } }`. `id` and `datasource` are required.
+- `POST /api/index/v1/indexdocument`: body `{ "document": { "id": "...", "datasource": "...", "title": "...", "body": "..." } }`. `id` and `datasource` are required; `title` and `body` are both optional, but a document with neither has no real text for search to match against. `body` accepts either a plain string, or the `{ "mimeType": "...", "textContent": "..." }` shape real Glean's API documents; either way it becomes searchable text alongside the title.
 - `POST /api/index/v1/indexdocuments`: same shape, bulk: `{ "documents": [ {...}, {...} ] }`.
-- `GET /api/index/v1/getdocumentstatus?id=...&datasource=...`: returns `{ "id", "datasource", "status": "INDEXED" | "NOT_FOUND" }`.
+- `GET /api/index/v1/getdocumentstatus?id=...&datasource=...`: returns `{ "id", "datasource", "status": "INDEXED" | "NOT_FOUND" }`, plus `title` and `indexedAt` when indexed.
 
-A document only shows `"status": "INDEXED"` once it has actually been sent through one of
-the two indexing endpoints above with a matching `id` and `datasource`; indexing and
-searching are separate systems here, so a document your company already has on file
-elsewhere is not automatically indexed just because it exists.
+Indexing a document whose `id` already exists in this instance updates it in place,
+rather than creating a duplicate.
+
+Search and `getdocumentstatus` read the exact same pool of documents here, so the two can
+never disagree: if one says a document is indexed, the other can find it too. That pool
+starts with whatever your company already had on file when this run began (already
+searchable, already reporting `"status": "INDEXED"`, with nothing indexed yet this run)
+and grows as `indexdocument`/`indexdocuments` add or update entries in it. A document
+showing `"status": "INDEXED"` therefore does not by itself prove YOUR most recent
+indexing call did anything: check that the `id` you are querying, and the `title` or
+snippet a search call returns, are actually the ones you just sent.
 
 ### Errors
 

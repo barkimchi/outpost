@@ -58,16 +58,6 @@ function extractLabeled(ticketMd: string, label: string): string {
   return match[1];
 }
 
-function extractDocIds(ticketMd: string): string[] {
-  const ids: string[] = [];
-  const re = /^- `([^`]+)`/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(ticketMd)) !== null) {
-    if (m[1]) ids.push(m[1]);
-  }
-  return ids;
-}
-
 function collectTrainerEvents(): { events: TrainerEvent[]; stop: () => void } {
   const events: TrainerEvent[] = [];
   const onTrainerEvent = (ev: TrainerEvent): void => {
@@ -262,7 +252,7 @@ test('impl-oauth solved end to end: first-time consent, exchange, userinfo', asy
 
 // --- impl-glean: full live-HTTP solve -------------------------------------------------------
 
-test('impl-glean solved end to end: index, confirm the index picked it up, confirm search works', async () => {
+test('impl-glean solved end to end: a genuinely NEW document, unfindable before indexing, findable after (fix round finding 2)', async () => {
   const engine = freshEngine();
   const { events, stop } = collectTrainerEvents();
   const app = buildRealPipelineApp();
@@ -272,22 +262,47 @@ test('impl-glean solved end to end: index, confirm the index picked it up, confi
     const indexingToken = extractLabeled(activated.ticketMd, 'Indexing token');
     const clientToken = extractLabeled(activated.ticketMd, 'Search token');
     const datasource = extractLabeled(activated.ticketMd, 'Datasource');
-    const docIds = extractDocIds(activated.ticketMd);
-    assert.ok(docIds.length >= 1);
-    const firstDocId = docIds[0];
-    if (!firstDocId) throw new Error('no doc id extracted');
+    const docId = extractLabeled(activated.ticketMd, 'Document');
+
+    // Sanity, fix-round finding 2's own regression: this document must NOT already be
+    // indexed or searchable before step 1 ever runs (the original defect: a SEEDED doc id
+    // reported INDEXED and turned up in search with nothing indexed).
+    const beforeStatusUrl = new URL(`http://127.0.0.1:${port}/glean/api/index/v1/getdocumentstatus`);
+    beforeStatusUrl.searchParams.set('id', docId);
+    beforeStatusUrl.searchParams.set('datasource', datasource);
+    const beforeStatus = (await (await fetch(beforeStatusUrl, { headers: { authorization: `Bearer ${indexingToken}` } })).json()) as {
+      status: string;
+    };
+    assert.equal(beforeStatus.status, 'NOT_FOUND', 'the new document must genuinely not exist in the index before step 1');
+    const beforeSearch = (await (
+      await fetch(`http://127.0.0.1:${port}/glean/rest/api/v1/search`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${clientToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ query: 'readiness', pageSize: 10 }),
+      })
+    ).json()) as { results: Array<{ document: { id: string } }> };
+    assert.ok(!beforeSearch.results.some((r) => r.document.id === docId), 'the new document must not be searchable before it is indexed');
 
     const indexRes = await fetch(`http://127.0.0.1:${port}/glean/api/index/v1/indexdocuments`, {
       method: 'POST',
       headers: { authorization: `Bearer ${indexingToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ documents: docIds.map((id) => ({ id, datasource, title: id })) }),
+      body: JSON.stringify({ documents: [{ id: docId, datasource, title: `${docId} title`, body: 'launch readiness checklist' }] }),
     });
     assert.equal(indexRes.status, 200);
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.ok(events.some((e) => e.type === 'scenario:step' && e.stepId === 'step-1'));
 
+    // Wrong attempt (constraint 9): querying a SEEDED doc's id must not match step 2 at
+    // all (it is pinned to this document's own id), so the state must stay put.
+    const seededQuery = new URL(`http://127.0.0.1:${port}/glean/api/index/v1/getdocumentstatus`);
+    seededQuery.searchParams.set('id', 'doc-1');
+    seededQuery.searchParams.set('datasource', datasource);
+    await fetch(seededQuery, { headers: { authorization: `Bearer ${indexingToken}` } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(engine.getState().currentStepIndex, 1, 'a query for a seeded doc id must not be mistaken for step 2');
+
     const statusUrl = new URL(`http://127.0.0.1:${port}/glean/api/index/v1/getdocumentstatus`);
-    statusUrl.searchParams.set('id', firstDocId);
+    statusUrl.searchParams.set('id', docId);
     statusUrl.searchParams.set('datasource', datasource);
     const statusRes = await fetch(statusUrl, { headers: { authorization: `Bearer ${indexingToken}` } });
     assert.equal(statusRes.status, 200);
@@ -300,7 +315,7 @@ test('impl-glean solved end to end: index, confirm the index picked it up, confi
     const wrongTokenSearch = await fetch(`http://127.0.0.1:${port}/glean/rest/api/v1/search`, {
       method: 'POST',
       headers: { authorization: `Bearer ${indexingToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ query: 'anything', pageSize: 10 }),
+      body: JSON.stringify({ query: 'readiness', pageSize: 10 }),
     });
     assert.equal(wrongTokenSearch.status, 401, 'sanity: the indexing token must not authenticate the search endpoint');
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -312,16 +327,19 @@ test('impl-glean solved end to end: index, confirm the index picked it up, confi
     const searchRes = await fetch(`http://127.0.0.1:${port}/glean/rest/api/v1/search`, {
       method: 'POST',
       headers: { authorization: `Bearer ${clientToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ query: 'a', pageSize: 10 }),
+      body: JSON.stringify({ query: 'readiness', pageSize: 10 }),
     });
     assert.equal(searchRes.status, 200);
-    const searchBody = (await searchRes.json()) as { results: unknown[] };
-    assert.ok(searchBody.results.length >= 1, 'the run\'s pre-seeded company content must be discoverable via search');
+    const searchBody = (await searchRes.json()) as { results: Array<{ document: { id: string } }> };
+    assert.ok(
+      searchBody.results.some((r) => r.document.id === docId),
+      'the newly indexed document must now genuinely be findable by name, not just "something matched"',
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.ok(events.some((e) => e.type === 'scenario:step' && e.stepId === 'step-3'));
     assert.ok(events.some((e) => e.type === 'scenario:explaining'));
 
-    engine.explain('First-time connection, nothing broken.', 'Indexed the docs, confirmed the index, confirmed search.');
+    engine.explain('First-time connection, nothing broken.', 'Indexed the doc, confirmed the index, confirmed search.');
     assert.ok(events.some((e) => e.type === 'scenario:solved'));
   } finally {
     stop();
