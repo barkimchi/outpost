@@ -365,6 +365,41 @@ describe('store: ui slice + persistence', () => {
   });
 });
 
+describe('store: stale-response race guard', () => {
+  it('a slow init() hydration cannot clobber a faster activateScenario() issued after it started', async () => {
+    // Regression test for a real race this task's own end-to-end verification caught
+    // live: the server's engine is a long-lived singleton that outlives one page load, so
+    // init()'s GET /api/state can still be in flight when the learner immediately clicks
+    // a different scenario. If that slower hydration resolved last, it used to silently
+    // overwrite the freshly activated ticket with stale data from before the click.
+    let resolveGetState: (value: EnginePublicState) => void = () => {};
+    const pendingGetState = new Promise<EnginePublicState>((resolve) => {
+      resolveGetState = resolve;
+    });
+    mocked.health.mockResolvedValue({ ok: true, version: '0.0.0', port: 4600 });
+    mocked.getState.mockReturnValue(pendingGetState);
+    mocked.listScenarios.mockResolvedValue([]);
+    mocked.activate.mockResolvedValue(activatedPayload({ scenarioId: 't1-wrong-method' }));
+
+    const initPromise = useStore.getState().init();
+    // Flush pending microtasks so init() progresses past health() and issues its
+    // getState() call (which then legitimately blocks on our manually-controlled promise).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await useStore.getState().activateScenario('t1-wrong-method');
+    expect(useStore.getState().scenario.scenarioId).toBe('t1-wrong-method');
+    expect(useStore.getState().scenario.state).toBe('active');
+
+    // Now let the slow, now-stale getState() resolve with data that would have reset the
+    // scenario to idle. It must be discarded, not applied.
+    resolveGetState({ state: 'idle' });
+    await initPromise;
+
+    expect(useStore.getState().scenario.scenarioId).toBe('t1-wrong-method');
+    expect(useStore.getState().scenario.state).toBe('active');
+  });
+});
+
 describe('store: scenario list refresh', () => {
   it('loadScenarios stores the scenario list on success', async () => {
     const list: ScenarioListEntry[] = [{ id: 't1-wrong-method', tier: 1, track: 'troubleshoot', title: 'Wrong method', platform: 'github', solved: false, runs: 2 }];

@@ -91,6 +91,7 @@ export function ScenarioPicker(): React.JSX.Element {
       <button
         type="button"
         onClick={toggle}
+        aria-label="Scenario picker"
         className="flex items-center gap-1.5 rounded-md border border-gym-border bg-gym-panel2 px-2.5 py-1 text-xs font-medium text-gym-text transition-colors hover:border-gym-border-strong hover:bg-gym-panel3"
       >
         <span className="max-w-[200px] truncate">{label}</span>

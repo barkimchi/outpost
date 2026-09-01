@@ -45,6 +45,7 @@ export function RequestBuilder(): React.JSX.Element {
         <select
           value={request.method}
           onChange={(e) => updateRequestDraft({ method: e.target.value })}
+          aria-label="HTTP method"
           className={`shrink-0 rounded-md border border-gym-border bg-gym-panel2 px-2 py-1.5 font-mono text-xs font-bold focus:outline-none focus:ring-1 focus:ring-gym-accent-dim ${METHOD_COLOR[request.method] ?? 'text-gym-text'}`}
         >
           {METHODS.map((m) => (
@@ -59,6 +60,7 @@ export function RequestBuilder(): React.JSX.Element {
           onChange={(e) => updateRequestDraft({ url: e.target.value })}
           placeholder="http://127.0.0.1:4600/github/user"
           spellCheck={false}
+          aria-label="Request URL"
           className={`flex-1 ${fieldClass}`}
         />
         <button

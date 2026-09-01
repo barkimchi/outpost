@@ -109,6 +109,21 @@ export interface StoreState {
   lastHeartbeatTs: number | null;
   scenarios: ScenarioListEntry[];
   scenario: ScenarioSlice;
+  /**
+   * Guards against a stale-response race: the server's engine state is a long-lived
+   * singleton that outlives any one page load, so `init()`'s `GET /api/state` hydration
+   * can still be in flight when the learner immediately clicks a different scenario in
+   * the picker. If that slower hydration resolved after the faster `activate()` call, it
+   * would silently overwrite the freshly activated ticket with whatever the server was
+   * showing at the moment the page loaded, a genuine bug this task's own end-to-end
+   * verification caught live. Every client-initiated scenario fetch (`init`,
+   * `activateScenario`, `activateDrill`, `resetScenario`) bumps this counter before
+   * awaiting and only commits its result if the counter has not moved on since; a fresher
+   * action always wins over a slower, older one, regardless of resolution order. SSE-driven
+   * updates (`handleTrainerEvent`) never need this guard: they push the server's actual
+   * current state directly and are not racing a client-side fetch.
+   */
+  scenarioEpoch: number;
   logs: RequestEvent[];
   request: RequestDraft;
   response: ResponseState | null;
@@ -228,6 +243,7 @@ export const useStore = create<StoreState>((set, get) => ({
   lastHeartbeatTs: null,
   scenarios: [],
   scenario: defaultScenarioSlice(),
+  scenarioEpoch: 0,
   logs: [],
   request: defaultRequestDraft(),
   response: null,
@@ -247,9 +263,13 @@ export const useStore = create<StoreState>((set, get) => ({
       set({ errorMessage: `Could not reach the trainer server: ${messageFromError(err)}` });
     }
 
+    const epoch = get().scenarioEpoch + 1;
+    set({ scenarioEpoch: epoch });
     try {
       const state = await trainerApi.getState();
-      set({ scenario: engineStateToSlice(state) });
+      // Discard if a faster, more recent scenario action (a click) already moved the
+      // epoch on: this hydration is now stale and must not clobber it.
+      if (get().scenarioEpoch === epoch) set({ scenario: engineStateToSlice(state) });
     } catch {
       // Health already reported the outage above; do not double up the banner.
     }
@@ -332,30 +352,36 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   async activateScenario(id) {
+    const epoch = get().scenarioEpoch + 1;
+    set({ scenarioEpoch: epoch });
     try {
       const payload = await trainerApi.activate(id);
-      set({ scenario: activatedPayloadToSlice(payload), response: null, errorMessage: null });
+      if (get().scenarioEpoch === epoch) set({ scenario: activatedPayloadToSlice(payload), response: null, errorMessage: null });
     } catch (err) {
-      set({ errorMessage: `Could not activate ${id}: ${messageFromError(err)}` });
+      if (get().scenarioEpoch === epoch) set({ errorMessage: `Could not activate ${id}: ${messageFromError(err)}` });
     }
   },
 
   async activateDrill(tier) {
+    const epoch = get().scenarioEpoch + 1;
+    set({ scenarioEpoch: epoch });
     try {
       const payload = await trainerApi.activateDrill(tier);
-      set({ scenario: activatedPayloadToSlice(payload), response: null, errorMessage: null });
+      if (get().scenarioEpoch === epoch) set({ scenario: activatedPayloadToSlice(payload), response: null, errorMessage: null });
     } catch (err) {
-      set({ errorMessage: `Could not start a drill: ${messageFromError(err)}` });
+      if (get().scenarioEpoch === epoch) set({ errorMessage: `Could not start a drill: ${messageFromError(err)}` });
     }
   },
 
   async resetScenario() {
+    const epoch = get().scenarioEpoch + 1;
+    set({ scenarioEpoch: epoch });
     try {
       await trainerApi.resetScenario();
       const state = await trainerApi.getState();
-      set({ scenario: engineStateToSlice(state), response: null, errorMessage: null });
+      if (get().scenarioEpoch === epoch) set({ scenario: engineStateToSlice(state), response: null, errorMessage: null });
     } catch (err) {
-      set({ errorMessage: `Could not reset: ${messageFromError(err)}` });
+      if (get().scenarioEpoch === epoch) set({ errorMessage: `Could not reset: ${messageFromError(err)}` });
     }
   },
 
