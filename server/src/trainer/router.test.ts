@@ -19,7 +19,8 @@ import { engine } from '../engine/engine.js';
 async function listen() {
   const webDistDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pg-router-test-'));
   const app = createApp({ webDistDir, production: false });
-  const server = app.listen(0);
+  // 127.0.0.1, not a bare listen(0): see docs/SPEC.md section 2a.
+  const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const { port } = server.address() as AddressInfo;
   return { server, port };

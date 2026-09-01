@@ -13,7 +13,8 @@ function buildApp() {
 }
 
 async function listen() {
-  const server = buildApp().listen(0);
+  // 127.0.0.1, not a bare listen(0): see docs/SPEC.md section 2a.
+  const server = buildApp().listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const { port } = server.address() as AddressInfo;
   return { server, port };

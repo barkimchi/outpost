@@ -25,7 +25,13 @@ import type { RequestEvent } from '@gym/shared';
 
 async function listen(webDistDir?: string, options: Omit<CreateAppOptions, 'webDistDir'> = {}) {
   const app = createApp({ webDistDir, production: true, ...options });
-  const server = app.listen(0);
+  // 127.0.0.1, not a bare listen(0): a bare listen(0) binds the IPv6 wildcard `::`
+  // dual-stack, and macOS's ephemeral-port allocator does not treat an existing IPv4
+  // wildcard listener as a conflict, so it can hand out a port another process (Spotify,
+  // Tailscale, a concurrently running test file) already serves on IPv4. fetch() dials
+  // IPv4, so the request would silently land on that foreign process instead of this
+  // server (docs/SPEC.md section 2a).
+  const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const { port } = server.address() as AddressInfo;
   return { server, port };

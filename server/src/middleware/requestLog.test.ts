@@ -76,7 +76,10 @@ async function listen() {
     emitBodyParserFailureEvent(req, res, JSON.stringify(body));
   });
 
-  const server = app.listen(0);
+  // 127.0.0.1, not a bare listen(0): see docs/SPEC.md section 2a (a bare listen(0)
+  // binds the IPv6 wildcard, which macOS's ephemeral-port allocator can hand out even
+  // when another process already holds the same port on IPv4, and fetch() dials IPv4).
+  const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const { port } = server.address() as AddressInfo;
   return { server, port };

@@ -7,9 +7,10 @@ async function listen() {
   // OS-assigned ephemeral port (0), never a fixed literal: this project's tests never
   // bind a real port number, to avoid colliding with a running dev server, this
   // machine's permanently reserved ports (docs/SPEC.md section 2), or anything else
-  // already listening.
+  // already listening. Bound to 127.0.0.1 explicitly, not a bare listen(0): see
+  // docs/SPEC.md section 2a (the IPv6-wildcard/IPv4-fetch mismatch).
   const app = createApp({ production: false });
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const { port } = server.address() as AddressInfo;
   return { server, port };
