@@ -1,0 +1,63 @@
+import type { ReactNode } from 'react';
+import { useStore } from '../../state/store.js';
+import { Markdown } from '../../lib/markdown.js';
+import { ExplainBack } from './ExplainBack.js';
+
+function Tag({ children, accent }: { children: ReactNode; accent?: boolean }): React.JSX.Element {
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+        accent ? 'bg-gym-accent-dim text-gym-accent-soft' : 'bg-gym-panel3 text-gym-text-faint'
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** The ticket (spec section 13's editor-styled reference panel), the Explain-back prompt
+ *  once every step passes, and the revealed solution once solved. */
+export function TicketTab(): React.JSX.Element {
+  const scenario = useStore((s) => s.scenario);
+  const revealSolution = useStore((s) => s.revealSolution);
+
+  if (scenario.state === 'idle' || !scenario.ticketMd) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 text-center text-xs text-gym-text-faint">
+        Pick a scenario from the bar above to load a ticket.
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-y-auto p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        {scenario.tier !== undefined && <Tag>Tier {scenario.tier}</Tag>}
+        {scenario.platform && <Tag>{scenario.platform}</Tag>}
+        {scenario.drill && <Tag accent>Drill</Tag>}
+        {scenario.seed && <span className="ml-auto font-mono text-[10px] text-gym-text-faint">run #{scenario.seed}</span>}
+      </div>
+
+      <Markdown text={scenario.ticketMd} />
+
+      {scenario.state === 'explaining' && <ExplainBack />}
+
+      {scenario.state === 'solved' && (
+        <div className="mt-5 rounded-lg border border-gym-green-dim bg-gym-green-dim/15 p-3">
+          <p className="mb-2 text-xs font-semibold text-gym-green">Solved.</p>
+          {scenario.solutionMd ? (
+            <Markdown text={scenario.solutionMd} />
+          ) : (
+            <button
+              type="button"
+              onClick={() => void revealSolution()}
+              className="text-xs text-gym-text-dim underline decoration-gym-border underline-offset-2 hover:text-gym-text"
+            >
+              Reveal the solution
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
