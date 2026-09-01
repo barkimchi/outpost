@@ -23,7 +23,17 @@ vi.mock('../api/client.js', () => ({
   },
 }));
 
+// `runScript` (`scripts/run.ts`) spins up a real Worker from a Blob URL, neither of which
+// jsdom implements; `worker.test.ts` and `run.test.ts` already cover that logic against a
+// production-string harness and a mocked worker respectively. Here it is mocked at the
+// module boundary so `sendRequest`'s ORCHESTRATION (pipeline order, envPatch application,
+// testResults/consoleLines wiring) can be verified without touching either.
+vi.mock('../scripts/run.js', () => ({
+  runScript: vi.fn(),
+}));
+
 const { trainerApi } = await import('../api/client.js');
+const { runScript } = await import('../scripts/run.js');
 const { useStore } = await import('./store.js');
 
 const mocked = trainerApi as unknown as {
@@ -43,6 +53,8 @@ const mocked = trainerApi as unknown as {
   getDoc: ReturnType<typeof vi.fn>;
 };
 
+const mockedRunScript = runScript as ReturnType<typeof vi.fn>;
+
 const initialState = useStore.getState();
 
 beforeEach(() => {
@@ -54,6 +66,10 @@ beforeEach(() => {
   mocked.getWorkspace.mockResolvedValue(defaultWorkspace());
   mocked.putWorkspace.mockResolvedValue({ ok: true });
   mocked.listDocs.mockResolvedValue([]);
+  // Matches the real runScript's own empty-script fast path, so every existing
+  // sendRequest test (none of which set a script) behaves identically whether or not
+  // this module is mocked.
+  mockedRunScript.mockResolvedValue({ testResults: [], envPatch: {}, consoleLines: [], error: null });
 });
 
 afterEach(() => {
@@ -558,6 +574,127 @@ describe('store: {{var}} resolution on send', () => {
     await useStore.getState().sendRequest();
 
     expect(mocked.proxy).toHaveBeenCalledWith(expect.objectContaining({ headers: { Authorization: 'Bearer abc123' } }));
+  });
+});
+
+describe('store: script engine pipeline (docs/SPEC.md section 14)', () => {
+  it('runs neither script when both are empty (the default draft)', async () => {
+    mocked.proxy.mockResolvedValue({ status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    useStore.setState((s) => ({ request: { ...s.request, url: 'http://x/y' } }));
+
+    await useStore.getState().sendRequest();
+
+    expect(mockedRunScript).not.toHaveBeenCalled();
+    expect(useStore.getState().testResults).toEqual([]);
+    expect(useStore.getState().consoleLines).toEqual([]);
+  });
+
+  it('applies the pre-request script envPatch to the active environment BEFORE resolving {{vars}}, so the sent request carries the computed value', async () => {
+    mocked.proxy.mockResolvedValue({ status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    useStore.setState({
+      environments: [{ id: 'e1', name: 'Local', variables: [{ id: 'v1', key: 'baseUrl', value: 'http://x', enabled: true }] }],
+      activeEnvironmentId: 'e1',
+    });
+    useStore.setState((s) => ({
+      request: {
+        ...s.request,
+        url: '{{baseUrl}}/y',
+        headers: [{ id: 'h1', key: 'X-Sig', value: '{{sig}}', enabled: true }],
+        scripts: { ...s.request.scripts, preRequest: 'pm.environment.set("sig", "computed-signature");' },
+      },
+    }));
+    mockedRunScript.mockResolvedValueOnce({ testResults: [], envPatch: { sig: 'computed-signature' }, consoleLines: [], error: null });
+
+    await useStore.getState().sendRequest();
+
+    // The literal {{sig}} never reaches the proxy call: the pre-request script's write
+    // landed in the environment before {{vars}} resolution ran.
+    expect(mocked.proxy).toHaveBeenCalledWith(expect.objectContaining({ headers: { 'X-Sig': 'computed-signature' } }));
+    // And it is durably visible in the environment afterward, not a one-request overlay.
+    expect(useStore.getState().environments[0]?.variables).toContainEqual(expect.objectContaining({ key: 'sig', value: 'computed-signature', enabled: true }));
+  });
+
+  it('with no active environment, envPatch is applied only for this one send (no environment to persist into)', async () => {
+    mocked.proxy.mockResolvedValue({ status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    useStore.setState((s) => ({
+      request: {
+        ...s.request,
+        url: 'http://x/y',
+        headers: [{ id: 'h1', key: 'X-Sig', value: '{{sig}}', enabled: true }],
+        scripts: { ...s.request.scripts, preRequest: 'pm.environment.set("sig", "ephemeral");' },
+      },
+    }));
+    mockedRunScript.mockResolvedValueOnce({ testResults: [], envPatch: { sig: 'ephemeral' }, consoleLines: [], error: null });
+
+    await useStore.getState().sendRequest();
+
+    expect(mocked.proxy).toHaveBeenCalledWith(expect.objectContaining({ headers: { 'X-Sig': 'ephemeral' } }));
+    expect(useStore.getState().environments).toEqual([]);
+  });
+
+  it('runs the tests script after the response arrives, with the real status/body/headers, and records pass/fail rows', async () => {
+    const proxyResponse: ProxyResponseBody = { status: 200, headers: { 'x-test': 'yes' }, body: '{"ok":true}', timeMs: 5, sizeBytes: 12 };
+    mocked.proxy.mockResolvedValue(proxyResponse);
+    useStore.setState((s) => ({
+      request: { ...s.request, url: 'http://x/y', scripts: { ...s.request.scripts, test: 'pm.test("status is 200", () => pm.response.to.have.status(200));' } },
+    }));
+    mockedRunScript.mockResolvedValueOnce({
+      testResults: [{ name: 'status is 200', passed: true }],
+      envPatch: {},
+      consoleLines: ['checked status'],
+      error: null,
+    });
+
+    await useStore.getState().sendRequest();
+
+    expect(mockedRunScript).toHaveBeenCalledWith(
+      'pm.test("status is 200", () => pm.response.to.have.status(200));',
+      expect.objectContaining({ response: expect.objectContaining({ status: 200, statusText: 'OK', body: '{"ok":true}' }) }),
+    );
+    expect(useStore.getState().testResults).toEqual([{ name: 'status is 200', passed: true }]);
+    expect(useStore.getState().consoleLines).toEqual(['checked status']);
+  });
+
+  it('a failing test row does not surface as an errorMessage banner and does not break the response', async () => {
+    mocked.proxy.mockResolvedValue({ status: 500, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    useStore.setState((s) => ({
+      request: { ...s.request, url: 'http://x/y', scripts: { ...s.request.scripts, test: 'pm.test("status is 200", () => pm.response.to.have.status(200));' } },
+    }));
+    mockedRunScript.mockResolvedValueOnce({
+      testResults: [{ name: 'status is 200', passed: false, error: 'expected response to have status 200 but got 500' }],
+      envPatch: {},
+      consoleLines: [],
+      error: null,
+    });
+
+    await useStore.getState().sendRequest();
+
+    expect(useStore.getState().testResults).toEqual([{ name: 'status is 200', passed: false, error: 'expected response to have status 200 but got 500' }]);
+    expect(useStore.getState().response).toEqual({ kind: 'success', status: 500, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    expect(useStore.getState().errorMessage).toBeNull();
+  });
+
+  it('a script-level failure (timeout, syntax error) shows up as its own named row in testResults', async () => {
+    mocked.proxy.mockResolvedValue({ status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    useStore.setState((s) => ({
+      request: { ...s.request, url: 'http://x/y', scripts: { ...s.request.scripts, test: 'while(true){}' } },
+    }));
+    mockedRunScript.mockResolvedValueOnce({ testResults: [], envPatch: {}, consoleLines: [], error: 'Script timed out after 2000ms (an infinite loop is the usual cause).' });
+
+    await useStore.getState().sendRequest();
+
+    expect(useStore.getState().testResults).toEqual([{ name: 'Tests script', passed: false, error: 'Script timed out after 2000ms (an infinite loop is the usual cause).' }]);
+  });
+
+  it('resets testResults/consoleLines at the start of every sendRequest, so a stale run never lingers', async () => {
+    useStore.setState({ testResults: [{ name: 'stale', passed: true }], consoleLines: ['stale line'] });
+    mocked.proxy.mockResolvedValue({ status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    useStore.setState((s) => ({ request: { ...s.request, url: 'http://x/y' } }));
+
+    await useStore.getState().sendRequest();
+
+    expect(useStore.getState().testResults).toEqual([]);
+    expect(useStore.getState().consoleLines).toEqual([]);
   });
 });
 
