@@ -15,7 +15,7 @@
     "start": "NODE_ENV=production node server/dist/index.js",
     "typecheck": "tsc -b && tsc --noEmit -p web/tsconfig.node.json",
     "lint:style": "node scripts/check-style.mjs",
-    "test": "npm run lint:style && tsx --test '{shared,server}/src/**/*.test.ts'"
+    "test": "npm run lint:style && POSTMAN_GYM_DATA_DIR=\"$(mktemp -d)\" tsx --test '{shared,server}/src/**/*.test.ts'"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

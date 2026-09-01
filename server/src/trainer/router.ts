@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { VERSION, PORT } from '../config.js';
 import { engine, EngineError } from '../engine/engine.js';
 import { proxyHandler } from './proxy.js';
@@ -7,10 +7,16 @@ import { sseHandler } from './sse.js';
 
 /**
  * `/_trainer` control plane, spec section 6 step 4 and section 10. Task 1 wired health,
- * proxy, and SSE. This task (3) adds the scenarios/activate/drill/reset/state/hint/
- * solution/explain routes (spec section 10) plus one synthetic warm-up endpoint (see
- * below). Workspace/docs routes and the OAuth callback land in later tasks, as additional
- * routes on this same router, never a rewrite of it.
+ * proxy, and SSE. Task 3 added the scenarios/activate/drill/reset/state/hint/solution/
+ * explain routes (spec section 10). Workspace/docs routes and the OAuth callback land in
+ * later tasks, as additional routes on this same router, never a rewrite of it.
+ *
+ * Fix round after Task 3: this file used to also carry a synthetic
+ * `POST /api/warmup/content-type` endpoint, added only because `platforms/` was off
+ * limits during the original build and no mounted `/github` route accepted a body.
+ * Removed once that constraint lifted: `t1-content-type` now targets the real
+ * `POST /github/user/repos` endpoint in `platforms/github/router.ts`, per spec section 5
+ * ("paths under a platform base are byte-identical to the real product's").
  */
 
 function sendEngineError(res: Response, err: unknown): void {
@@ -103,25 +109,6 @@ export function createTrainerRouter(): Router {
     } catch (err) {
       sendEngineError(res, err);
     }
-  });
-
-  // --- Synthetic warm-up target for t1-content-type (docs/SPEC.md section 12, scenario
-  // 3). This task's dispatch placed platforms/ off limits while a concurrent review runs
-  // against it, and no currently mounted /github endpoint accepts a body, so this
-  // scenario needs a POST-with-JSON-body target that does not require touching
-  // platforms/github/router.ts. /_trainer is the control plane, not a "platform base"
-  // mirroring a real product (spec section 5), so a synthetic, clearly-labeled endpoint
-  // here is not a byte-identical-path violation. It validates nothing but Content-Type,
-  // on purpose: the lesson is entirely about that one header.
-  router.post('/api/warmup/content-type', (req: Request, res: Response) => {
-    if (!req.is('application/json')) {
-      res.status(400).json({
-        error: 'Bad Request',
-        message: `Content-Type must be application/json. Got: ${req.get('content-type') ?? '(none)'}`,
-      });
-      return;
-    }
-    res.status(201).json({ ok: true, received: typeof req.body === 'object' ? req.body : null });
   });
 
   return router;

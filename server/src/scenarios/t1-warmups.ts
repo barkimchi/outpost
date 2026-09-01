@@ -3,17 +3,15 @@ import { escapeRegex } from '../engine/match.js';
 
 /**
  * Tier 1 warm-ups (docs/SPEC.md section 12, scenarios 1-3): general REST literacy before
- * the platform-specific lessons in tier 2 and up. `t1-wrong-method` and `t1-pagination`
- * target the already-mounted `/github` router (Task 2). `t1-content-type` targets a small
- * synthetic endpoint added to `server/src/trainer/router.ts` in this task
- * (`POST /_trainer/api/warmup/content-type`): this task's dispatch placed `platforms/`
- * off limits for editing while a concurrent review runs against it, and none of the
- * currently mounted GitHub endpoints accept a body, so there is no existing real-platform
- * path this specific lesson could target without a router change. `/_trainer` is the
- * control plane, not a "platform base" mirroring a real product (docs/SPEC.md section 5),
- * so a synthetic, clearly-labeled endpoint there does not violate the byte-identical-path
- * requirement, which applies only to `/github` `/google` `/glean` `/slack`. Tagged
- * `platform: 'mixed'` for that reason: it deliberately is not GitHub-specific.
+ * the platform-specific lessons in tier 2 and up. All three target the already-mounted
+ * `/github` router.
+ *
+ * `t1-content-type` originally targeted a synthetic `/_trainer/api/warmup/content-type`
+ * endpoint, added when `platforms/` was off limits for the original Task 3 build. Fix
+ * round: moved onto the real `POST /github/user/repos` endpoint (added to
+ * `platforms/github/router.ts` in this fix round) once that constraint lifted, per spec
+ * section 5 ("paths under a platform base are byte-identical to the real product's, so a
+ * Postman collection built here transfers by swapping one baseUrl").
  *
  * Every ticket, step, and assertion below is built from `RunContext`, never a literal
  * (docs/PLAN.md Global Constraint 5).
@@ -144,17 +142,18 @@ const t1ContentType: ScenarioDef = {
   tier: 1,
   track: 'troubleshoot',
   title: 'Missing Content-Type',
-  platform: 'mixed',
-  docsRef: ['rest-basics'],
+  platform: 'github',
+  docsRef: ['github'],
   build(ctx: RunContext) {
     const ticketMd = `
 ## Ticket
 
-${ctx.company.name}'s onboarding script POSTs a JSON payload to the internal intake
-endpoint below, and it keeps coming back with a 400. The payload looks fine when you
-read it out loud.
+${ctx.company.name}'s onboarding script tries to create a new GitHub repo and keeps
+coming back with a 400. The payload looks fine when you read it out loud.
 
-    POST /_trainer/api/warmup/content-type
+    POST /github/user/repos
+    Authorization: token ${ctx.github.validPat}
+    { "name": "new-onboarding-repo" }
 
 Find out what the server is actually objecting to.
 `.trim();
@@ -167,7 +166,7 @@ Find out what the server is actually objecting to.
         {
           id: 'step-1',
           title: 'POST JSON with the correct Content-Type',
-          match: { method: 'POST', pathPattern: '^/_trainer/api/warmup/content-type$' },
+          match: { method: 'POST', pathPattern: '^/github/user/repos$' },
           assertions: [{ kind: 'status', equals: 201 }],
           attemptHint: 'A 400 here means the server does not think this is JSON. Check the Content-Type header, not the body text.',
         },
@@ -181,9 +180,9 @@ Find out what the server is actually objecting to.
 ## Root cause
 
 The request body was valid JSON text, but the \`Content-Type\` header was not
-\`application/json\` (missing, or left as \`text/plain\`). The server only parses a body
-as JSON when the header says so; otherwise it is treated as an unparsed string, and the
-intake endpoint rejects it with 400.
+\`application/json\` (missing, or left as \`text/plain\`). GitHub only parses a body as
+JSON when the header says so; otherwise it treats the request as if it never got a body
+at all, and \`POST /user/repos\` rejects it with 400.
 
 ## Fix
 

@@ -29,8 +29,12 @@ const PLATFORM_PREFIXES = new Set<Platform>(['github', 'google', 'glean', 'slack
  * request whose casing or trailing slash differs from a scenario's matcher would
  * otherwise be invisible to the engine while still getting a real response from the
  * platform mock.
+ *
+ * Exported (fix round after Task 3) so `faultInjector.ts` derives `pathLower` the exact
+ * same way when it consults `engine.activeInterceptFault()`, instead of a second,
+ * possibly-drifting copy of this logic.
  */
-function toPathLower(rawPath: string): string {
+export function toPathLower(rawPath: string): string {
   const lower = rawPath.toLowerCase();
   const stripped = lower.replace(/\/+$/, '');
   return stripped === '' ? '/' : stripped;
@@ -55,7 +59,9 @@ function normalizeHeaders(
   return out;
 }
 
-function normalizeQuery(query: Request['query']): Record<string, string> {
+/** Exported (fix round after Task 3) for the same reason as `toPathLower`: `faultInjector.ts`
+ *  builds a `MatchableRequest` from the same query shape and must normalize it identically. */
+export function normalizeQuery(query: Request['query']): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined) continue;

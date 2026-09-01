@@ -93,3 +93,34 @@ export function methodNotAllowedFixture(): { message: string; documentation_url:
     documentation_url: 'https://docs.github.com/rest',
   };
 }
+
+// UNVERIFIED SHAPE: approximated. Added in the Task 3 fix round for `POST /user/repos`
+// (create a repository), used by `t1-content-type` once that scenario moved off a
+// synthetic trainer-only endpoint onto this real GitHub path. This project never holds
+// real credentials (hard constraint 3) and a live authenticated POST against
+// api.github.com would have real side effects on a real account even if it did, so this
+// was not reproduced live. Modeled on GitHub's documented requirement that API request
+// bodies be sent as JSON, and on the "Problems parsing JSON" wording GitHub is known to
+// return for a body it cannot parse as such.
+export function problemsParsingJson(): { message: string; documentation_url: string } {
+  return {
+    message: 'Problems parsing JSON',
+    documentation_url: 'https://docs.github.com/rest',
+  };
+}
+
+// UNVERIFIED SHAPE: approximated, for the same reason as problemsParsingJson() above.
+// Modeled on GitHub's documented general validation-error envelope
+// (https://docs.github.com/rest/overview/resources-in-the-rest-api#client-errors):
+// {message, errors: [{resource, code, field}], documentation_url}.
+export function missingNameField(): {
+  message: string;
+  errors: Array<{ resource: string; code: string; field: string }>;
+  documentation_url: string;
+} {
+  return {
+    message: 'Validation Failed',
+    errors: [{ resource: 'Repository', code: 'missing_field', field: 'name' }],
+    documentation_url: 'https://docs.github.com/rest/repos/repos#create-a-repository-for-the-authenticated-user',
+  };
+}

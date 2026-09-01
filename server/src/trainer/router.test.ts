@@ -113,12 +113,18 @@ test('t1-content-type solved end to end through the real app: attempt (wrong Con
       method: 'POST',
     });
     assert.equal(activateRes.status, 200);
+    const activated = (await activateRes.json()) as { ticketMd: string };
+    const patMatch = activated.ticketMd.match(/token (ghp_[A-Za-z0-9]{36})/);
+    const validPat = patMatch?.[1];
+    assert.ok(validPat, 'ticketMd must embed the PAT to use, per this run');
 
     // Wrong Content-Type: text/plain, a JSON-shaped body. Must 400 and count as an attempt.
-    const badRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/warmup/content-type`, {
+    // Real GitHub endpoint now (fix round): POST /github/user/repos, not a synthetic
+    // trainer-only path.
+    const badRes = await fetch(`http://127.0.0.1:${port}/github/user/repos`, {
       method: 'POST',
-      headers: { 'content-type': 'text/plain' },
-      body: JSON.stringify({ hello: 'world' }),
+      headers: { 'content-type': 'text/plain', authorization: `token ${validPat}` },
+      body: JSON.stringify({ name: 'new-onboarding-repo' }),
     });
     assert.equal(badRes.status, 400);
 
@@ -127,10 +133,10 @@ test('t1-content-type solved end to end through the real app: attempt (wrong Con
     assert.equal(midState.attempts, 1, 'a wrong Content-Type is a matched attempt, not silent browsing');
     assert.equal(midState.state, 'active');
 
-    const goodRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/warmup/content-type`, {
+    const goodRes = await fetch(`http://127.0.0.1:${port}/github/user/repos`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hello: 'world' }),
+      headers: { 'content-type': 'application/json', authorization: `token ${validPat}` },
+      body: JSON.stringify({ name: 'new-onboarding-repo' }),
     });
     assert.equal(goodRes.status, 201);
 

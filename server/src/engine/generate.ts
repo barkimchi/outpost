@@ -238,6 +238,16 @@ export function generate(seed: string): RunContext {
   if (!targetRepoEntry) throw new Error('generate(): repo list was unexpectedly empty');
   const pageSize = rng.pick([1, 2]);
 
+  // Fix round: which of the two candidate GitHub tokens (validPat vs secondPat) a
+  // Tier-2 scenario cripples with its fault. Originally every t2-* scenario always
+  // crippled validPat and always held secondPat back as the untouched fallback, and
+  // always listed them in that same order in the ticket. That made the SHAPE of the fix
+  // memorizable ("the second one listed always works") even though the underlying token
+  // strings differed every run: eight live activations of t2-revoked-pat all had the
+  // fix in the same slot. This is drawn from the same seeded rng as everything else, so
+  // it varies per run and a captured seed still reproduces it.
+  const brokenCredentialSlot: 'valid' | 'second' = rng.bool(0.5) ? 'valid' : 'second';
+
   const channelNames = rng.pickN(CHANNEL_NAME_POOL, rng.int(3, 5));
   const channels = channelNames.map((name) => ({
     id: `C${rng.token(9, UPPER_ALNUM)}`,
@@ -296,6 +306,7 @@ export function generate(seed: string): RunContext {
     vars: {
       pageSize: String(pageSize),
       targetRepo: targetRepoEntry.name,
+      brokenCredentialSlot,
     },
   };
 }

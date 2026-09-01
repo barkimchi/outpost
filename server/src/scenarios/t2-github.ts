@@ -3,18 +3,37 @@ import { escapeRegex } from '../engine/match.js';
 
 /**
  * Tier 2: GitHub (docs/SPEC.md section 12, scenarios 4-7). All four are STATE faults
- * (docs/SPEC.md section 7: "prefer state faults"): each mutates one token record in the
- * World at activation, and the already-built `/github` router (Task 2) errors on its own,
- * exactly as spec section 7 intends ("the healthy router errors naturally, and the real
- * fix genuinely resolves it"). None needs an intercept fault, so none of these depends on
- * `faultInjector.ts` being wired in.
+ * (docs/SPEC.md section 7: "prefer state faults"): each mutates one of two candidate
+ * token records in the World at activation, and the already-built `/github` router
+ * (Task 2) errors on its own, exactly as spec section 7 intends ("the healthy router
+ * errors naturally, and the real fix genuinely resolves it"). None needs an intercept
+ * fault, so none of these depends on `faultInjector.ts` being wired in (it now is, as of
+ * this fix round, but these four still do not use it).
  *
- * Every ticket hands the learner BOTH the broken token and a working alternative
- * (`secondPat`, or `validPat` once the fault targets a different token), matching the
- * curriculum's own framing ("fix by using the run's valid PAT", "switch to the second
- * PAT"): the lesson is diagnosing WHICH credential is broken and why, from the response
- * itself, not guessing at a hidden value.
+ * **Fix round, docs/SPEC.md hard constraint 7a.** Every ticket originally handed the
+ * learner two tokens, always labeled "wired into the script" (always the broken one,
+ * `validPat`) and "spare" (always the fix, `secondPat`), always in that order. Live
+ * testing found the answer's SHAPE was memorizable even though the token strings were
+ * not: "the second one listed always works," across 8/8 activations. Regenerating values
+ * while the position of the correct answer stays fixed just moves the shortcut up one
+ * level.
+ *
+ * Fixed by reading `ctx.vars.brokenCredentialSlot` (set in `generate.ts` from the same
+ * seeded rng, so a captured seed still reproduces it): the fault targets `validPat` or
+ * `secondPat` depending on that draw, and the ticket lists both under neutral, identity-
+ * free labels ("Token 1" / "Token 2", always in `validPat`-then-`secondPat` field order,
+ * never reordered by brokenness) so which position holds the fix varies run to run
+ * instead of being fixed by the ticket's own narrative framing. The learner has to
+ * actually call the endpoint with each token to find out which one works; see
+ * `engine.test.ts` for the 6-run distribution check and `task-3-report.md` for the live
+ * distribution across real activations.
  */
+
+function brokenAndWorkingPats(ctx: RunContext): { brokenPat: string; workingPat: string } {
+  const broken = ctx.vars.brokenCredentialSlot === 'second' ? ctx.github.secondPat : ctx.github.validPat;
+  const working = ctx.vars.brokenCredentialSlot === 'second' ? ctx.github.validPat : ctx.github.secondPat;
+  return { brokenPat: broken, workingPat: working };
+}
 
 const t2RevokedPat: ScenarioDef = {
   id: 't2-revoked-pat',
@@ -24,23 +43,34 @@ const t2RevokedPat: ScenarioDef = {
   platform: 'github',
   docsRef: ['github'],
   build(ctx: RunContext) {
+    const { brokenPat, workingPat } = brokenAndWorkingPats(ctx);
+
     const ticketMd = `
 ## Ticket
 
-${ctx.company.name}'s integration script authenticates to GitHub and gets 401 Bad
-credentials on every request. Ops handed over the two personal access tokens on file for
-this integration:
+${ctx.company.name}'s integration to GitHub is failing. Two personal access tokens are
+on file for it:
 
-- Currently wired into the script: \`${ctx.github.revokedPat}\`
-- A second token issued the same day, never wired in: \`${ctx.github.validPat}\`
+- Token 1: \`${ctx.github.validPat}\`
+- Token 2: \`${ctx.github.secondPat}\`
 
-Work out which one is broken and get the script authenticating again.
+Exactly one of them currently authenticates. Find out which, and get the integration
+working with it.
 `.trim();
+
+    const fault: Fault = {
+      id: 'revoke-one-token',
+      kind: 'state',
+      apply(w) {
+        const record = w.github.tokens[brokenPat];
+        if (record) record.valid = false;
+      },
+    };
 
     return {
       ticketMd,
       setup: [],
-      faults: [],
+      faults: [fault],
       steps: [
         {
           id: 'step-1',
@@ -50,23 +80,23 @@ Work out which one is broken and get the script authenticating again.
             { kind: 'status', equals: 200 },
             { kind: 'jsonPath', path: 'login', equals: ctx.user.login },
           ],
-          attemptHint: '401 Bad credentials means the credential itself is invalid, not a header or method problem.',
+          attemptHint: '401 Bad credentials means the credential itself is the problem. Try the other token before assuming anything else is wrong.',
         },
       ],
       hints: [
-        'GitHub returns the identical 401 body whether a token is malformed or was explicitly revoked; the message alone does not say which.',
-        'One of the two tokens above is dead on arrival. Try the other one.',
+        'GitHub returns the identical 401 body whether a token is malformed, expired, or explicitly revoked; the message alone does not say which token is which.',
+        'One request per token is enough to know for certain which one is dead. Try both against GET /github/user.',
       ],
       solutionMd: `
 ## Root cause
 
-\`${ctx.github.revokedPat}\` was revoked. GitHub answers every request from a revoked or
-otherwise never-valid token with \`401 Bad credentials\`, regardless of what the request
-actually asked for.
+\`${brokenPat}\` was revoked (or otherwise never valid). GitHub answers every request
+from an invalid token with \`401 Bad credentials\`, regardless of what the request
+actually asked for. Nothing about the request itself was wrong.
 
 ## Fix
 
-Switch the script to the current token, \`${ctx.github.validPat}\`.
+Use \`${workingPat}\` instead.
 `.trim(),
     };
   },
@@ -80,23 +110,26 @@ const t2MissingScope: ScenarioDef = {
   platform: 'github',
   docsRef: ['github'],
   build(ctx: RunContext) {
+    const { brokenPat, workingPat } = brokenAndWorkingPats(ctx);
+
     const ticketMd = `
 ## Ticket
 
 ${ctx.company.name}'s nightly job lists every repo in the \`${ctx.github.org}\` org and
-has started failing with 403. Two tokens are on file:
+has started failing with 403. Two tokens are on file for it:
 
-- Wired into the job: \`${ctx.github.validPat}\`
-- A spare admin token, provisioned with full org read access: \`${ctx.github.secondPat}\`
+- Token 1: \`${ctx.github.validPat}\`
+- Token 2: \`${ctx.github.secondPat}\`
 
-Work out why the first token stopped working, and get the listing succeeding again.
+One of them is missing a scope this endpoint requires. Work out which, and get the
+listing succeeding with the other.
 `.trim();
 
     const fault: Fault = {
       id: 'missing-read-org',
       kind: 'state',
       apply(w) {
-        const record = w.github.tokens[ctx.github.validPat];
+        const record = w.github.tokens[brokenPat];
         if (record) record.scopes = record.scopes.filter((s) => s !== 'read:org');
       },
     };
@@ -114,24 +147,23 @@ Work out why the first token stopped working, and get the listing succeeding aga
             { kind: 'status', equals: 200 },
             { kind: 'jsonArrayLength', path: '', min: 1 },
           ],
-          attemptHint: 'A 403 here is about permission, not identity. Compare X-OAuth-Scopes against X-Accepted-OAuth-Scopes on the failing response.',
+          attemptHint: 'A 403 here is about permission, not identity. Compare X-OAuth-Scopes against X-Accepted-OAuth-Scopes on the failing response before switching tokens.',
         },
       ],
       hints: [
-        'The response headers on the 403 name exactly which scope was required and which scopes the token actually carries.',
-        `X-OAuth-Scopes on the failing token is missing read:org. The spare token, ${ctx.github.secondPat}, still has it.`,
+        'The response headers on the 403 name exactly which scope was required and which scopes that specific token actually carries.',
+        "Check both tokens' X-OAuth-Scopes. Only one of them is missing read:org.",
       ],
       solutionMd: `
 ## Root cause
 
-\`${ctx.github.validPat}\` lost the \`read:org\` scope. \`GET /orgs/:org/repos\` requires
-it, and GitHub answers with 403 \`Resource not accessible by personal access token\`
-along with \`X-Accepted-OAuth-Scopes: read:org\` to name exactly what was missing.
+\`${brokenPat}\` is missing the \`read:org\` scope that \`GET /orgs/:org/repos\` requires.
+GitHub answers with 403 \`Resource not accessible by personal access token\` and
+\`X-Accepted-OAuth-Scopes: read:org\` naming exactly what was missing.
 
 ## Fix
 
-Switch the job to the spare token, \`${ctx.github.secondPat}\`, which still carries
-\`read:org\`.
+Use \`${workingPat}\`, which still carries \`read:org\`.
 `.trim(),
     };
   },
@@ -145,25 +177,30 @@ const t2Private404: ScenarioDef = {
   platform: 'github',
   docsRef: ['github'],
   build(ctx: RunContext) {
+    const { brokenPat, workingPat } = brokenAndWorkingPats(ctx);
+    const escapedOrg = escapeRegex(ctx.github.org);
+    const escapedRepo = escapeRegex(ctx.github.privateRepo);
+
     const ticketMd = `
 ## Ticket
 
 Someone on ${ctx.company.name}'s team swears
 \`${ctx.github.org}/${ctx.github.privateRepo}\` was deleted, because
-\`GET /repos/${ctx.github.org}/${ctx.github.privateRepo}\` returns 404 for the token
-wired into their tooling: \`${ctx.github.validPat}\`
+\`GET /repos/${ctx.github.org}/${ctx.github.privateRepo}\` returns 404. You checked
+GitHub's web UI yourself: the repo is still there. Two tokens are on file for the
+tooling that hits this endpoint:
 
-You checked GitHub's web UI yourself: the repo is still there. A spare token is on file
-too: \`${ctx.github.secondPat}\`
+- Token 1: \`${ctx.github.validPat}\`
+- Token 2: \`${ctx.github.secondPat}\`
 
-Figure out what is actually going on and get the request returning the repo.
+Figure out what is actually going on, and get the request returning the repo.
 `.trim();
 
     const fault: Fault = {
       id: 'strip-repo-scope',
       kind: 'state',
       apply(w) {
-        const record = w.github.tokens[ctx.github.validPat];
+        const record = w.github.tokens[brokenPat];
         if (record) record.scopes = record.scopes.filter((s) => s !== 'repo');
       },
     };
@@ -176,33 +213,29 @@ Figure out what is actually going on and get the request returning the repo.
         {
           id: 'step-1',
           title: `GET the private repo ${ctx.github.privateRepo}`,
-          match: {
-            method: 'GET',
-            pathPattern: `^/github/repos/${escapeRegex(ctx.github.org)}/${escapeRegex(ctx.github.privateRepo)}$`,
-          },
+          match: { method: 'GET', pathPattern: `^/github/repos/${escapedOrg}/${escapedRepo}$` },
           assertions: [
             { kind: 'status', equals: 200 },
             { kind: 'jsonPath', path: 'name', equals: ctx.github.privateRepo },
           ],
-          attemptHint: 'GitHub returns 404, not 403, for a private repo a token cannot see. "Not Found" here can mean "not found by you."',
+          attemptHint: 'GitHub returns 404, not 403, for a private repo a token cannot see. "Not Found" here can mean "not found by you." Try the other token before concluding anything was deleted.',
         },
       ],
       hints: [
         'A deleted repo and a private repo you lack access to look identical from the API: both 404.',
-        'Try the request with the spare token before concluding the repo is actually gone.',
-        `${ctx.github.secondPat} still has the repo scope the wired-in token is missing.`,
+        'One of the two tokens above still has the repo scope needed to see private repos. The other does not.',
       ],
       solutionMd: `
 ## Root cause
 
-The repo is private, and \`${ctx.github.validPat}\` lost the \`repo\` scope needed to see
+The repo is private, and \`${brokenPat}\` is missing the \`repo\` scope needed to see
 private repositories. GitHub's real privacy model answers a private repo a token cannot
 see with \`404 Not Found\`, the same body it uses for a repo that genuinely does not
 exist. The repo was never deleted.
 
 ## Fix
 
-Use the spare token, \`${ctx.github.secondPat}\`, which still carries \`repo\`.
+Use \`${workingPat}\`, which still carries \`repo\`.
 `.trim(),
     };
   },
@@ -216,22 +249,26 @@ const t2RateLimit: ScenarioDef = {
   platform: 'github',
   docsRef: ['github'],
   build(ctx: RunContext) {
+    const { brokenPat, workingPat } = brokenAndWorkingPats(ctx);
+
     const ticketMd = `
 ## Ticket
 
-${ctx.company.name}'s sync job hammers the GitHub API all day with
-\`${ctx.github.validPat}\` and just started failing with 403 on every call. A second
-token exists for exactly this situation: \`${ctx.github.secondPat}\`
+${ctx.company.name}'s sync job hammers the GitHub API all day and just started failing
+with 403 on every call. Two tokens are on file for it:
+
+- Token 1: \`${ctx.github.validPat}\`
+- Token 2: \`${ctx.github.secondPat}\`
 
 Confirm what is actually wrong before you touch anything, then get the job running
-again.
+again with whichever token still has budget.
 `.trim();
 
     const fault: Fault = {
       id: 'exhaust-rate-limit',
       kind: 'state',
       apply(w) {
-        const record = w.github.tokens[ctx.github.validPat];
+        const record = w.github.tokens[brokenPat];
         if (record) {
           record.rateLimit.remaining = 0;
           record.rateLimit.used = record.rateLimit.limit;
@@ -252,25 +289,24 @@ again.
             { kind: 'status', equals: 200 },
             { kind: 'jsonPath', path: 'login', equals: ctx.user.login },
           ],
-          attemptHint: 'A 403 with x-ratelimit-remaining: 0 is not a permissions problem. Read x-ratelimit-reset on the failing response before doing anything else.',
+          attemptHint: "A 403 with x-ratelimit-remaining: 0 is not a permissions problem. Read x-ratelimit-reset on the failing response, then check the other token's budget before switching.",
         },
       ],
       hints: [
         'This 403 has a different message than a scope problem: read the response body, not just the status code.',
-        'x-ratelimit-remaining: 0 means the budget is gone until x-ratelimit-reset, not that the token is broken.',
-        `Switch to the second token, ${ctx.github.secondPat}, which has its own independent budget.`,
+        'Only one of the two tokens above has an exhausted budget. Check x-ratelimit-remaining on each.',
       ],
       solutionMd: `
 ## Root cause
 
-\`${ctx.github.validPat}\` used its entire rate-limit budget. GitHub answers with 403
-and \`x-ratelimit-remaining: 0\`, plus an \`x-ratelimit-reset\` unix timestamp for when the
+\`${brokenPat}\` used its entire rate-limit budget. GitHub answers with 403 and
+\`x-ratelimit-remaining: 0\`, plus an \`x-ratelimit-reset\` unix timestamp for when the
 budget refills. The token itself is fine; it is simply out of requests for this window.
 
 ## Fix
 
-Switch the job to \`${ctx.github.secondPat}\`, which has its own separate budget, while
-the first token's window resets.
+Use \`${workingPat}\`, which has its own separate, untouched budget, while the first
+token's window resets.
 `.trim(),
     };
   },

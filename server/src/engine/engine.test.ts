@@ -49,17 +49,32 @@ async function listen(app: express.Express) {
   return { server, port };
 }
 
-/** Pulls a backtick-wrapped GitHub PAT immediately following a known ticket-text label.
- *  Scenarios in this task always hand over credentials this way (see t2-github.ts). */
-function extractLabeledPat(ticketMd: string, label: string): string {
-  const idx = ticketMd.indexOf(label);
-  if (idx === -1) throw new Error(`ticketMd label not found: "${label}"`);
-  const rest = ticketMd.slice(idx + label.length);
-  const match = rest.match(/`(ghp_[A-Za-z0-9]{36})`/);
-  if (!match) throw new Error(`no PAT found after label: "${label}"`);
-  const pat = match[1];
-  if (!pat) throw new Error(`no PAT found after label: "${label}"`);
-  return pat;
+/**
+ * Pulls every backtick-wrapped GitHub PAT out of a ticket, in the order they appear.
+ * t2-* scenarios (fix round) deliberately give both candidate tokens NEUTRAL labels
+ * ("Token 1" / "Token 2"), never a label implying which one works, precisely so a test
+ * (or a learner) cannot determine the fix from ticket text alone; both must be tried
+ * against the live router to find out which one actually authenticates. See
+ * `determineWorkingPat` below.
+ */
+function extractTicketTokens(ticketMd: string): [string, string] {
+  const matches = [...ticketMd.matchAll(/`(ghp_[A-Za-z0-9]{36})`/g)].map((m) => m[1] as string);
+  if (matches.length !== 2) {
+    throw new Error(`expected exactly 2 PATs in ticketMd, found ${matches.length}`);
+  }
+  return [matches[0] as string, matches[1] as string];
+}
+
+/** Tries both candidate tokens against a real, live `/github/user` and reports which one
+ *  actually authenticates. This is the only honest way to know which is the fix now that
+ *  the ticket text itself carries no signal either way (fix round, spec hard constraint
+ *  7a). */
+async function determineWorkingPat(port: number, tokenA: string, tokenB: string): Promise<{ working: string; broken: string }> {
+  const resA = await fetch(`http://127.0.0.1:${port}/github/user`, { headers: { authorization: `token ${tokenA}` } });
+  if (resA.status === 200) return { working: tokenA, broken: tokenB };
+  const resB = await fetch(`http://127.0.0.1:${port}/github/user`, { headers: { authorization: `token ${tokenB}` } });
+  if (resB.status === 200) return { working: tokenB, broken: tokenA };
+  throw new Error(`neither candidate token authenticated (statuses ${resA.status}, ${resB.status})`);
 }
 
 // --- Activation payload shape -----------------------------------------------------------
@@ -119,17 +134,15 @@ test('activating the same scenario twice produces different RunContext data end 
   try {
     const run1 = engine.activate('t2-revoked-pat');
     const world1 = activeWorld();
-    const run1ValidPat = extractLabeledPat(run1.ticketMd, 'never wired in:');
-    assert.ok(world1.github.tokens[run1ValidPat]?.valid, 'sanity: run 1 valid PAT is genuinely valid in run 1 World');
+    const [run1TokenA, run1TokenB] = extractTicketTokens(run1.ticketMd);
 
-    // Prove it actually authenticates against the real router right now.
     const app = buildRealPipelineApp();
     const { server: s1, port: p1 } = await listen(app);
+    let run1Working: string;
     try {
-      const res1 = await fetch(`http://127.0.0.1:${p1}/github/user`, {
-        headers: { authorization: `token ${run1ValidPat}` },
-      });
-      assert.equal(res1.status, 200, 'sanity: run 1 valid PAT works in run 1');
+      const { working } = await determineWorkingPat(p1, run1TokenA, run1TokenB);
+      run1Working = working;
+      assert.ok(world1.github.tokens[run1Working]?.valid, 'sanity: the token that just authenticated is genuinely valid in run 1 World');
     } finally {
       s1.close();
     }
@@ -137,29 +150,61 @@ test('activating the same scenario twice produces different RunContext data end 
     // Re-activate the SAME scenario id: fresh seed, fresh generate(), fresh resetState().
     const run2 = engine.activate('t2-revoked-pat');
     const world2 = activeWorld();
-    const run2ValidPat = extractLabeledPat(run2.ticketMd, 'never wired in:');
+    const [run2TokenA, run2TokenB] = extractTicketTokens(run2.ticketMd);
 
     assert.notEqual(run1.seed, run2.seed, 'seed must differ between activations');
-    assert.notEqual(run1ValidPat, run2ValidPat, "run 1's valid PAT must differ from run 2's");
+    assert.notEqual(run1TokenA, run2TokenA, "run 1's first-listed token must differ from run 2's");
+    assert.notEqual(run1TokenB, run2TokenB, "run 1's second-listed token must differ from run 2's");
     assert.notDeepEqual(world1.github.repos, world2.github.repos, 'company/org repo draw must differ');
     assert.notEqual(run1.ticketMd, run2.ticketMd, 'ticket text (which embeds the credentials) must differ');
-    assert.equal(world2.github.tokens[run1ValidPat], undefined, "run 1's valid PAT must not exist at all in run 2's World");
+    assert.equal(world2.github.tokens[run1Working], undefined, "run 1's working token must not exist at all in run 2's World");
 
     const { server: s2, port: p2 } = await listen(app);
     try {
       const res2 = await fetch(`http://127.0.0.1:${p2}/github/user`, {
-        headers: { authorization: `token ${run1ValidPat}` },
+        headers: { authorization: `token ${run1Working}` },
       });
-      assert.equal(res2.status, 401, "run 1's valid PAT must NOT solve run 2");
+      assert.equal(res2.status, 401, "run 1's working token must NOT solve run 2");
 
-      const res3 = await fetch(`http://127.0.0.1:${p2}/github/user`, {
-        headers: { authorization: `token ${run2ValidPat}` },
-      });
-      assert.equal(res3.status, 200, "run 2's own valid PAT must solve run 2");
+      const { working: run2Working } = await determineWorkingPat(p2, run2TokenA, run2TokenB);
+      assert.ok(run2Working, "run 2 must still have its own working token, discoverable independently");
     } finally {
       s2.close();
     }
   } finally {
+    engine.dispose();
+  }
+});
+
+// --- Fix round: hard constraint 7a, "the position or identity of the correct answer
+// varies," not just the values. Run each affected scenario several times and confirm the
+// fix is not always in the same slot. ---------------------------------------------------
+
+test('t2-revoked-pat: across 8 activations, the working token is NOT always in the same ticket slot (position varies, not just values)', async () => {
+  const engine = freshEngine();
+  const app = buildRealPipelineApp();
+  const { server, port } = await listen(app);
+  try {
+    let firstSlotWorkedCount = 0;
+    let secondSlotWorkedCount = 0;
+    const seenTicketTexts = new Set<string>();
+    for (let i = 0; i < 8; i++) {
+      const activated = engine.activate('t2-revoked-pat');
+      seenTicketTexts.add(activated.ticketMd);
+      const [tokenA, tokenB] = extractTicketTokens(activated.ticketMd);
+      const { working } = await determineWorkingPat(port, tokenA, tokenB);
+      if (working === tokenA) firstSlotWorkedCount += 1;
+      else secondSlotWorkedCount += 1;
+    }
+    assert.equal(seenTicketTexts.size, 8, 'every activation must produce distinct ticket text (values still differ every run)');
+    assert.equal(firstSlotWorkedCount + secondSlotWorkedCount, 8);
+    assert.ok(
+      firstSlotWorkedCount > 0 && secondSlotWorkedCount > 0,
+      `expected both ticket slots to win at least once across 8 runs; got first-slot=${firstSlotWorkedCount}, second-slot=${secondSlotWorkedCount}. ` +
+        'A 8/0 or 0/8 split would mean the answer position is still fixed, exactly the bug this test guards against.',
+    );
+  } finally {
+    server.close();
     engine.dispose();
   }
 });
@@ -175,8 +220,14 @@ test('full lifecycle: failed attempts emit a human reason and unlock a hint at 3
   bus.on('trainer-event', onTrainerEvent);
   try {
     const activated = engine.activate('t2-revoked-pat');
-    const revokedPat = extractLabeledPat(activated.ticketMd, 'Currently wired into the script:');
-    const validPat = extractLabeledPat(activated.ticketMd, 'never wired in:');
+    const [tokenA, tokenB] = extractTicketTokens(activated.ticketMd);
+    // t2-revoked-pat's fault flips one token's World record to invalid: peek at World
+    // directly to know which, rather than making a probing HTTP call that would itself
+    // count as the very request this test needs to happen exactly 3 times below.
+    const worldNow = activeWorld();
+    const { validPat, revokedPat } = worldNow.github.tokens[tokenA]?.valid
+      ? { validPat: tokenA, revokedPat: tokenB }
+      : { validPat: tokenB, revokedPat: tokenA };
 
     const app = buildRealPipelineApp();
     const { server, port } = await listen(app);
@@ -262,13 +313,21 @@ test('a request that does not match the current step is ignored entirely: no att
 
 // --- resetState / reset(): a solved scenario is re-runnable indefinitely ----------------
 
+function findValidPat(tokenA: string, tokenB: string): string {
+  const world = activeWorld();
+  if (world.github.tokens[tokenA]?.valid) return tokenA;
+  if (world.github.tokens[tokenB]?.valid) return tokenB;
+  throw new Error('neither candidate token is valid in the current World');
+}
+
 test('reset() re-activates the current scenario with a new seed and is solvable again from a clean attempts/step count', async () => {
   const engine = freshEngine();
   try {
     const first = engine.activate('t2-revoked-pat');
     const app = buildRealPipelineApp();
 
-    const validPat1 = extractLabeledPat(first.ticketMd, 'never wired in:');
+    const [firstTokenA, firstTokenB] = extractTicketTokens(first.ticketMd);
+    const validPat1 = findValidPat(firstTokenA, firstTokenB);
     const { server: s1, port: p1 } = await listen(app);
     try {
       const res = await fetch(`http://127.0.0.1:${p1}/github/user`, { headers: { authorization: `token ${validPat1}` } });
@@ -291,7 +350,8 @@ test('reset() re-activates the current scenario with a new seed and is solvable 
     const second = engine.getState();
     assert.notEqual(second.ticketMd, first.ticketMd, 'reset() must mint a new seed, not replay the same run');
 
-    const validPat2 = extractLabeledPat(second.ticketMd ?? '', 'never wired in:');
+    const [secondTokenA, secondTokenB] = extractTicketTokens(second.ticketMd ?? '');
+    const validPat2 = findValidPat(secondTokenA, secondTokenB);
     const { server: s2, port: p2 } = await listen(app);
     try {
       const res = await fetch(`http://127.0.0.1:${p2}/github/user`, { headers: { authorization: `token ${validPat2}` } });

@@ -24,5 +24,14 @@ export const VERSION = '0.0.0';
  */
 export const WEB_DIST_DIR = path.resolve(here, '../../web/dist');
 
-/** Runtime state directory. progress.json and workspace.json live here (gitignored). */
-export const DATA_DIR = path.resolve(here, '../../data');
+/**
+ * Runtime state directory. progress.json and workspace.json live here (gitignored).
+ * Overridable via `POSTMAN_GYM_DATA_DIR` (fix round after Task 3): `npm test` sets this
+ * to a fresh temp directory for the whole run, so the production `engine` singleton used
+ * by `trainer/router.test.ts` (and any future test that needs the real HTTP wiring)
+ * never touches the real `data/progress.json`. That file holds Bar's explain-back
+ * writeups and is not reconstructable if a test run clobbers it.
+ */
+export const DATA_DIR = process.env.POSTMAN_GYM_DATA_DIR
+  ? path.resolve(process.env.POSTMAN_GYM_DATA_DIR)
+  : path.resolve(here, '../../data');

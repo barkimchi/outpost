@@ -6,8 +6,10 @@ import { activeWorld } from '../world.js';
 import {
   badCredentials,
   methodNotAllowedFixture,
+  missingNameField,
   notFoundFixture,
   orgReposNotFound,
+  problemsParsingJson,
   rateLimitExceeded,
   resourceNotAccessible,
 } from './fixtures.js';
@@ -230,6 +232,49 @@ export function createGithubRouter(): Router {
       const link = buildLinkHeader(req, page, perPage, repos.length);
       if (link) res.set('Link', link);
       res.json(pageItems.map((repo) => repoBody(repo, world.github.org)));
+    })
+    .post((req, res) => {
+      // Real GitHub endpoint: "Create a repository for the authenticated user" (added in
+      // the Task 3 fix round). t1-content-type targets this instead of a synthetic
+      // trainer-only endpoint (spec section 5: paths under a platform base must be
+      // byte-identical to the real product's, so a Postman collection built here
+      // transfers by swapping one baseUrl). Success does not mutate World.github.repos:
+      // the response body is a reasonable approximation, not asserted byte-exact by any
+      // scenario (same convention already used by the GET success bodies in this file).
+      const requestId = githubRequestId();
+      const auth = authenticateOrRespond(req, res);
+      if (!auth) return;
+      const world = activeWorld();
+      if (!chargeRateLimitOrRespond(res, auth.record, world.github.user.id, requestId)) return;
+
+      applyStandardHeaders(res, auth.record, requestId);
+      res.set('x-accepted-oauth-scopes', PRIVATE_REPO_REQUIRED_SCOPE);
+
+      // express.json() only populates req.body when Content-Type matches
+      // application/json; anything else (missing, text/plain, ...) leaves it unparsed,
+      // which is exactly the lesson t1-content-type teaches. req.is() checks the header
+      // itself, independent of whether a body parser ran.
+      if (!req.is('application/json')) {
+        res.status(400).json(problemsParsingJson());
+        return;
+      }
+
+      const body = (req.body ?? {}) as { name?: unknown; private?: unknown };
+      if (typeof body.name !== 'string' || body.name.trim() === '') {
+        res.status(422).json(missingNameField());
+        return;
+      }
+
+      const newRepoId = parseInt(randomBytes(4).toString('hex'), 16) % 900_000 + 100_000;
+      res.status(201).json({
+        id: newRepoId,
+        name: body.name,
+        full_name: `${world.github.org}/${body.name}`,
+        private: Boolean(body.private),
+        owner: { login: world.github.org, type: 'Organization' },
+        html_url: `https://github.com/${world.github.org}/${body.name}`,
+        default_branch: 'main',
+      });
     })
     .all((_req, res) => methodNotAllowed(res));
 
