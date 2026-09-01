@@ -39,6 +39,18 @@ Train first, showcase second.
    A token that solved run 1 must fail in run 2.
 7. **Assertions compare against the current run's generated values**, never hardcoded
    strings.
+7a. **The ANSWER must be generated too, not only the values.** Regenerating credentials
+   while the shape of the solution stays fixed produces a memorizable shortcut, which is
+   the exact failure per-run generation exists to prevent. Verified example: in
+   `t2-revoked-pat` the ticket listed two tokens and the working one was the second across
+   8 of 8 activations. Every value differed each run and the stated acceptance test
+   passed, yet a learner who ran it three times would learn "use the second token" and
+   stop diagnosing. So the generator must also randomize WHICH candidate is the good one,
+   WHICH scope is missing, WHICH token is rate-limited, WHICH page holds the target, and
+   WHICH field is malformed. **The acceptance test is therefore two-part:** across
+   repeated activations, (a) the concrete values differ and run 1's answer fails in run 2,
+   AND (b) the position or identity of the correct answer varies. Part (b) is the one that
+   is easy to pass by accident while still being broken.
 8. **Never assert on the absence of a header.** Postman adds its own (`User-Agent`,
    `Accept`, `Postman-Token`, `Accept-Encoding`, `Connection`).
 9. **Attempt feedback always says why it didn't count.** "Right endpoint, still 401"
