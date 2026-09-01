@@ -148,8 +148,9 @@ Add `scripts/check-style.mjs` and wire it as root `npm run lint:style`, also cal
 - an em-dash (U+2014) or en-dash (U+2013) in any tracked `.ts`, `.tsx`, `.md`, `.json`, or
   `.mjs` file, EXCLUDING `docs/reference/**` (archived documents from another session,
   preserved verbatim on purpose) and `package-lock.json`.
-- the literal string `4700` anywhere outside `docs/SPEC.md` (that port belongs to a
-  different long-running process on this machine and must never be reintroduced).
+- the literal string for the port reserved in `docs/SPEC.md` section 2, anywhere outside
+  that file (that port belongs to a different long-running process on this machine and
+  must never be reintroduced).
 
 No em-dashes is the project owner's hard style rule and it has already been violated once
 across the spec, the plan, and the ledger. A grep in CI is cheaper than remembering. Keep
