@@ -15,9 +15,10 @@ interface ProxyRequestBody {
  * The allowed port is the port THIS connection actually arrived on
  * (`req.socket.localPort`), not the statically imported `PORT` config value. Those
  * usually agree, but not always: tests boot the app on an OS-assigned ephemeral port
- * (`listen(0)`) precisely to avoid colliding with a real dev server or with 4700 (see
- * docs/SPEC.md section 2), and a live process can also be restarted with a different
- * `PORT` env value than whatever this module happened to resolve at import time.
+ * (`listen(0)`) precisely to avoid colliding with a real dev server or with this
+ * machine's permanently reserved ports (docs/SPEC.md section 2), and a live process can
+ * also be restarted with a different `PORT` env value than whatever this module
+ * happened to resolve at import time.
  * Deriving it from the live socket keeps the guarantee ("only this server, whatever
  * port it is actually on") true unconditionally.
  */

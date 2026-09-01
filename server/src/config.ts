@@ -10,7 +10,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * fresh clone has no `server/dist` yet), so it keeps its own literal fallback in sync by
  * reading `process.env.PORT` the same way. `config.test.ts` asserts the two literals
  * match so a future port change cannot silently drift between the two files the way it
- * did across this project's first three commits (4700 -> 4800 -> 4600).
+ * did across this project's first three commits, each of which touched both.
  */
 export const DEFAULT_PORT = 4600;
 

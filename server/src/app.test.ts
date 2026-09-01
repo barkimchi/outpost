@@ -7,9 +7,10 @@ import path from 'node:path';
 import { createApp, type CreateAppOptions } from './app.js';
 
 /**
- * App-level scaffold tests. Boots createApp() on an ephemeral port (never 4700, so this
- * never collides with a running dev server or with anything else already on the
- * machine) and exercises it with real HTTP requests.
+ * App-level scaffold tests. Boots createApp() on an OS-assigned ephemeral port (never a
+ * fixed literal, so this never collides with a running dev server, this machine's
+ * permanently reserved ports (docs/SPEC.md section 2), or anything else already
+ * listening) and exercises it with real HTTP requests.
  *
  * webDistDir is always an isolated temp directory created per test, never the repo's
  * real web/dist. That keeps these tests deterministic whether or not `npm run build`

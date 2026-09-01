@@ -4,9 +4,10 @@ import type { AddressInfo } from 'node:net';
 import { createApp } from '../app.js';
 
 async function listen() {
-  // Ephemeral port (0), never 4700 and never a fixed literal: this project's tests
-  // never bind a real port number, to avoid colliding with a running dev server or with
-  // anything else already on the machine (docs/SPEC.md section 2).
+  // OS-assigned ephemeral port (0), never a fixed literal: this project's tests never
+  // bind a real port number, to avoid colliding with a running dev server, this
+  // machine's permanently reserved ports (docs/SPEC.md section 2), or anything else
+  // already listening.
   const app = createApp({ production: false });
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
