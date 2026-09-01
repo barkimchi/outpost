@@ -102,16 +102,24 @@ export interface GoogleRefreshToken {
 /**
  * One document the Glean indexing mock has actually received via `POST /indexdocument` or
  * `/indexdocuments` (Task 7), distinct from `World.glean.docs` (the run's PRE-SEEDED,
- * already-searchable company content). Every field here has a real HTTP-reachable
- * consumer: `GET /api/index/v1/getdocumentstatus` (`platforms/glean/router.ts`) echoes
- * `title` and `indexedAt` back once a document is indexed (fix round, task-7 review
- * finding 2: both were write-only before this, populated at indexing time and read by
- * nothing, exactly the producer-with-no-consumer pattern hard constraint 7b names).
+ * already-searchable company content) but, since the second fix round below, joined into
+ * the SAME searchable pool `POST /rest/api/v1/search` reads from
+ * (`platforms/glean/router.ts`'s `allSearchableDocs()`): "index a document, then find it
+ * with search" is the core loop the real product sells, and `impl-glean`'s third step
+ * ("verify they come back from search") cannot be honestly taught otherwise. Every field
+ * here has a real HTTP-reachable consumer: `title` and `body` feed the same
+ * case-insensitive substring match `World.glean.docs` itself is matched against, and
+ * `GET /api/index/v1/getdocumentstatus` echoes `title`/`indexedAt` back once a document is
+ * indexed, both derived from the identical `allSearchableDocs()` lookup search uses, so
+ * the two endpoints can never disagree about whether a given id is indexed.
  */
 export interface GleanIndexedDoc {
   id: string;
   datasource: string;
   title?: string;
+  /** Free text matched the same way `World.glean.docs[].body` is: case-insensitive
+   *  substring, joined with `title` before matching. */
+  body?: string;
   /** Unix ms, `Date.now()` at the moment the indexing call was received. */
   indexedAt: number;
 }

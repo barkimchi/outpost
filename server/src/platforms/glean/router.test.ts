@@ -210,3 +210,129 @@ test('indexdocuments (bulk) stores every document; getdocumentstatus reports IND
     server.close();
   }
 });
+
+// --- Product-coherence fix round: index a document, then find it via search. This is the
+// core loop the real Glean product sells (docs/SPEC.md section 12's impl-glean rep), and
+// used to be impossible: search and indexing read two entirely separate World registries.
+
+test('the seeded corpus is searchable before anything is ever indexed', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const seededTitle = ctx.glean.docs[0]?.title;
+  if (!seededTitle) throw new Error('sanity: fixture must have at least one seeded doc');
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/glean/rest/api/v1/search`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.glean.clientToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ query: seededTitle, pageSize: 10 }),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { results: Array<{ title: string }> };
+    assert.ok(body.results.some((r) => r.title === seededTitle));
+  } finally {
+    server.close();
+  }
+});
+
+test('a document indexed with an indexing token is found by search with a client token: the core product loop', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const { server, port } = await listen();
+  try {
+    // A search for this exact phrase must return NOTHING before indexing: proves the
+    // subsequent hit is really caused by indexing, not a coincidental seeded match.
+    const before = await fetch(`http://127.0.0.1:${port}/glean/rest/api/v1/search`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.glean.clientToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'zzyzx quarterly compliance memo', pageSize: 10 }),
+    });
+    const beforeBody = (await before.json()) as { results: unknown[] };
+    assert.equal(beforeBody.results.length, 0, 'sanity: this phrase must not match any seeded doc');
+
+    const indexRes = await fetch(`http://127.0.0.1:${port}/glean/api/index/v1/indexdocument`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.glean.indexingToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        document: {
+          id: 'freshly-indexed-1',
+          datasource: ctx.glean.datasource,
+          title: 'Zzyzx Quarterly Compliance Memo',
+          body: { textContent: 'This memo covers the zzyzx quarterly compliance checklist for the finance team.' },
+        },
+      }),
+    });
+    assert.equal(indexRes.status, 200);
+
+    const after = await fetch(`http://127.0.0.1:${port}/glean/rest/api/v1/search`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.glean.clientToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'zzyzx quarterly compliance memo', pageSize: 10 }),
+    });
+    assert.equal(after.status, 200);
+    const afterBody = (await after.json()) as { results: Array<{ title: string; document: { id: string; datasource: string } }> };
+    const hit = afterBody.results.find((r) => r.document.id === 'freshly-indexed-1');
+    assert.ok(hit, 'the freshly-indexed document must come back from search');
+    assert.equal(hit?.title, 'Zzyzx Quarterly Compliance Memo');
+    assert.equal(hit?.document.datasource, ctx.glean.datasource);
+
+    // A title-only match (no body text overlap) must also work, and matching is
+    // case-insensitive.
+    const titleOnly = await fetch(`http://127.0.0.1:${port}/glean/rest/api/v1/search`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.glean.clientToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'ZZYZX QUARTERLY', pageSize: 10 }),
+    });
+    const titleOnlyBody = (await titleOnly.json()) as { results: Array<{ document: { id: string } }> };
+    assert.ok(titleOnlyBody.results.some((r) => r.document.id === 'freshly-indexed-1'));
+  } finally {
+    server.close();
+  }
+});
+
+test('getdocumentstatus never disagrees with search: a seeded doc reports INDEXED (no fabricated indexedAt); a freshly-indexed one matches both', async () => {
+  const ctx = buildTestRunContext();
+  resetState(ctx);
+  const seededDoc = ctx.glean.docs[0];
+  if (!seededDoc) throw new Error('sanity: fixture must have at least one seeded doc');
+  const { server, port } = await listen();
+  try {
+    // The seeded doc was never "indexed" this run, but search can already find it, so
+    // getdocumentstatus must say so too, not NOT_FOUND.
+    const seededStatus = await fetch(
+      `http://127.0.0.1:${port}/glean/api/index/v1/getdocumentstatus?id=${seededDoc.id}&datasource=${ctx.glean.datasource}`,
+      { headers: { authorization: `Bearer ${ctx.glean.indexingToken}` } },
+    );
+    const seededBody = (await seededStatus.json()) as { status: string; title?: string; indexedAt?: number };
+    assert.equal(seededBody.status, 'INDEXED', 'a seeded (pre-existing) doc must report INDEXED, matching what search can already find');
+    assert.equal(seededBody.title, seededDoc.title);
+    assert.equal(seededBody.indexedAt, undefined, 'a seeded doc was never actually indexed this run: no fabricated timestamp');
+
+    // Index a NEW document, then confirm both endpoints agree it exists.
+    await fetch(`http://127.0.0.1:${port}/glean/api/index/v1/indexdocument`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.glean.indexingToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ document: { id: 'consistency-check-1', datasource: ctx.glean.datasource, title: 'Consistency Check' } }),
+    });
+
+    const searchRes = await fetch(`http://127.0.0.1:${port}/glean/rest/api/v1/search`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.glean.clientToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'Consistency Check', pageSize: 10 }),
+    });
+    const searchBody = (await searchRes.json()) as { results: Array<{ document: { id: string } }> };
+    const foundBySearch = searchBody.results.some((r) => r.document.id === 'consistency-check-1');
+
+    const statusRes = await fetch(
+      `http://127.0.0.1:${port}/glean/api/index/v1/getdocumentstatus?id=consistency-check-1&datasource=${ctx.glean.datasource}`,
+      { headers: { authorization: `Bearer ${ctx.glean.indexingToken}` } },
+    );
+    const statusBody = (await statusRes.json()) as { status: string; indexedAt?: number };
+
+    assert.equal(foundBySearch, true, 'sanity: search must actually find the freshly-indexed doc');
+    assert.equal(statusBody.status, 'INDEXED');
+    assert.ok(typeof statusBody.indexedAt === 'number', 'a genuinely-indexed doc must carry a real indexedAt');
+  } finally {
+    server.close();
+  }
+});

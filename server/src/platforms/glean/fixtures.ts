@@ -96,7 +96,10 @@ export interface GleanSearchResponse {
 // is this mock's own reasonable completion, not confirmed against a real response. Not
 // asserted byte-exact by any scenario, same convention as every other platform's success
 // bodies in this project: only the error fixtures carry that requirement (spec section 7).
-export function gleanSearchResponse(query: string, docs: Array<{ id: string; title: string; body: string }>): GleanSearchResponse {
+export function gleanSearchResponse(
+  query: string,
+  docs: Array<{ id: string; title: string; body: string; datasource?: string }>,
+): GleanSearchResponse {
   const needle = query.trim().toLowerCase();
   const matches = needle === '' ? docs : docs.filter((d) => `${d.title} ${d.body}`.toLowerCase().includes(needle));
   return {
@@ -108,7 +111,11 @@ export function gleanSearchResponse(query: string, docs: Array<{ id: string; tit
     results: matches.map((d) => ({
       trackingToken: `res_${d.id}`,
       title: d.title,
-      document: { id: d.id, datasource: 'company-kb' },
+      // Product-coherence fix round: `d.datasource` is now the caller's REAL datasource
+      // (platforms/glean/router.ts's `allSearchableDocs()` always supplies one, for both
+      // seeded and live-indexed documents), not a hardcoded placeholder; falls back to
+      // 'company-kb' only for a caller that genuinely omits it.
+      document: { id: d.id, datasource: d.datasource ?? 'company-kb' },
       snippets: [{ snippet: d.body.slice(0, 160) }],
     })),
     hasMoreResults: false,
@@ -165,7 +172,17 @@ export interface GleanDocumentStatus {
 // reasonable, low-risk completion of this envelope (an indexing status check that could
 // not tell you WHEN something was indexed would be a strange lesser cousin of the real
 // thing), and it is genuinely reachable: see `platforms/glean/router.test.ts`.
-export function gleanDocumentStatus(id: string, datasource: string, doc: { title?: string; indexedAt: number } | undefined): GleanDocumentStatus {
+//
+// Second fix round (product-coherence: search and indexing status must agree on what is
+// "indexed"): `indexedAt` is now OPTIONAL on the input, not required, because
+// `platforms/glean/router.ts`'s `allSearchableDocs()` also resolves a SEEDED document
+// (part of `World.glean.docs`, never live-indexed this run, so it has no real
+// `indexedAt`) to `status: 'INDEXED'` here: a learner who can already find a seeded
+// document via search must never see `getdocumentstatus` disagree and call it
+// `NOT_FOUND`. A seeded-only match reports `INDEXED` with `indexedAt` simply absent,
+// rather than a fabricated timestamp for something that was never actually indexed
+// during this run.
+export function gleanDocumentStatus(id: string, datasource: string, doc: { title?: string; indexedAt?: number } | undefined): GleanDocumentStatus {
   if (!doc) return { id, datasource, status: 'NOT_FOUND' };
   return { id, datasource, status: 'INDEXED', title: doc.title, indexedAt: doc.indexedAt };
 }
