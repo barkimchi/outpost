@@ -31,33 +31,40 @@ export function TicketTab(): React.JSX.Element {
 
   return (
     <div className="h-full overflow-y-auto p-4">
-      <div className="mb-3 flex flex-wrap items-center gap-1.5">
-        {scenario.tier !== undefined && <Tag>Tier {scenario.tier}</Tag>}
-        {scenario.platform && <Tag>{scenario.platform}</Tag>}
-        {scenario.drill && <Tag accent>Drill</Tag>}
-        {scenario.seed && <span className="ml-auto font-mono text-[10px] text-gym-text-faint">run #{scenario.seed}</span>}
-      </div>
-
-      <Markdown text={scenario.ticketMd} />
-
-      {scenario.state === 'explaining' && <ExplainBack />}
-
-      {scenario.state === 'solved' && (
-        <div className="mt-5 rounded-lg border border-gym-green-dim bg-gym-green-dim/15 p-3">
-          <p className="mb-2 text-xs font-semibold text-gym-green">Solved.</p>
-          {scenario.solutionMd ? (
-            <Markdown text={scenario.solutionMd} />
-          ) : (
-            <button
-              type="button"
-              onClick={() => void revealSolution()}
-              className="text-xs text-gym-text-dim underline decoration-gym-border underline-offset-2 hover:text-gym-text"
-            >
-              Reveal the solution
-            </button>
-          )}
+      {/* A real prose measure (docs/SPEC.md section 13, fix round): without a cap, ticket
+       *  text ran the full width of whatever column it happened to be given, ragged and
+       *  hard to read at Demo mode's full 1440px. `mx-auto` centers this block when the
+       *  column is wider than 68ch (Demo mode); it is a no-op in the narrower normal-mode
+       *  reference panel, which is already close to 68ch itself. */}
+      <div className="mx-auto max-w-[68ch]">
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          {scenario.tier !== undefined && <Tag>Tier {scenario.tier}</Tag>}
+          {scenario.platform && <Tag>{scenario.platform}</Tag>}
+          {scenario.drill && <Tag accent>Drill</Tag>}
+          {scenario.seed && <span className="ml-auto font-mono text-[10px] text-gym-text-faint">run #{scenario.seed}</span>}
         </div>
-      )}
+
+        <Markdown text={scenario.ticketMd} />
+
+        {scenario.state === 'explaining' && <ExplainBack />}
+
+        {scenario.state === 'solved' && (
+          <div className="mt-5 rounded-lg border border-gym-green-dim bg-gym-green-dim/15 p-3">
+            <p className="mb-2 text-xs font-semibold text-gym-green">Solved.</p>
+            {scenario.solutionMd ? (
+              <Markdown text={scenario.solutionMd} />
+            ) : (
+              <button
+                type="button"
+                onClick={() => void revealSolution()}
+                className="text-xs text-gym-text-dim underline decoration-gym-border underline-offset-2 hover:text-gym-text"
+              >
+                Reveal the solution
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
