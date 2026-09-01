@@ -102,6 +102,41 @@ Use \`${workingPat}\` instead.
   },
 };
 
+/**
+ * Which specific real, distinct scope-gated 403 endpoint this run's `t2-missing-scope`
+ * targets (fix round 2, spec hard constraint 7a: "WHICH scope is missing" is its own
+ * dimension, not just which token). `GET /orgs/:org/repos` needs `read:org`;
+ * `GET /notifications` needs `notifications`, a genuinely different, real GitHub scope
+ * requirement, both already implemented in `platforms/github/router.ts`.
+ */
+interface MissingScopeVariant {
+  scope: string;
+  pathPattern: (ctx: RunContext) => string;
+  ticketAction: (ctx: RunContext) => string;
+  stepTitle: (ctx: RunContext) => string;
+  assertions: Array<{ kind: 'status'; equals: number } | { kind: 'jsonArrayLength'; path: string; min?: number }>;
+}
+
+const MISSING_SCOPE_VARIANTS: Record<'org' | 'notifications', MissingScopeVariant> = {
+  org: {
+    scope: 'read:org',
+    pathPattern: (ctx) => `^/github/orgs/${escapeRegex(ctx.github.org)}/repos$`,
+    ticketAction: (ctx) => `lists every repo in the \`${ctx.github.org}\` org`,
+    stepTitle: (ctx) => `List repos in ${ctx.github.org}`,
+    assertions: [
+      { kind: 'status', equals: 200 },
+      { kind: 'jsonArrayLength', path: '', min: 1 },
+    ],
+  },
+  notifications: {
+    scope: 'notifications',
+    pathPattern: () => '^/github/notifications$',
+    ticketAction: () => 'checks notifications',
+    stepTitle: () => 'List notifications',
+    assertions: [{ kind: 'status', equals: 200 }],
+  },
+};
+
 const t2MissingScope: ScenarioDef = {
   id: 't2-missing-scope',
   tier: 2,
@@ -111,26 +146,28 @@ const t2MissingScope: ScenarioDef = {
   docsRef: ['github'],
   build(ctx: RunContext) {
     const { brokenPat, workingPat } = brokenAndWorkingPats(ctx);
+    const variantKey = ctx.vars.missingScopeVariant === 'notifications' ? 'notifications' : 'org';
+    const variant = MISSING_SCOPE_VARIANTS[variantKey];
 
     const ticketMd = `
 ## Ticket
 
-${ctx.company.name}'s nightly job lists every repo in the \`${ctx.github.org}\` org and
-has started failing with 403. Two tokens are on file for it:
+${ctx.company.name}'s nightly job ${variant.ticketAction(ctx)} and has started failing
+with 403. Two tokens are on file for it:
 
 - Token 1: \`${ctx.github.validPat}\`
 - Token 2: \`${ctx.github.secondPat}\`
 
 One of them is missing a scope this endpoint requires. Work out which, and get the
-listing succeeding with the other.
+request succeeding with the other.
 `.trim();
 
     const fault: Fault = {
-      id: 'missing-read-org',
+      id: 'missing-scope',
       kind: 'state',
       apply(w) {
         const record = w.github.tokens[brokenPat];
-        if (record) record.scopes = record.scopes.filter((s) => s !== 'read:org');
+        if (record) record.scopes = record.scopes.filter((s) => s !== variant.scope);
       },
     };
 
@@ -141,29 +178,26 @@ listing succeeding with the other.
       steps: [
         {
           id: 'step-1',
-          title: `List repos in ${ctx.github.org}`,
-          match: { method: 'GET', pathPattern: `^/github/orgs/${escapeRegex(ctx.github.org)}/repos$` },
-          assertions: [
-            { kind: 'status', equals: 200 },
-            { kind: 'jsonArrayLength', path: '', min: 1 },
-          ],
+          title: variant.stepTitle(ctx),
+          match: { method: 'GET', pathPattern: variant.pathPattern(ctx) },
+          assertions: variant.assertions,
           attemptHint: 'A 403 here is about permission, not identity. Compare X-OAuth-Scopes against X-Accepted-OAuth-Scopes on the failing response before switching tokens.',
         },
       ],
       hints: [
         'The response headers on the 403 name exactly which scope was required and which scopes that specific token actually carries.',
-        "Check both tokens' X-OAuth-Scopes. Only one of them is missing read:org.",
+        `Check both tokens' X-OAuth-Scopes. Only one of them is missing ${variant.scope}.`,
       ],
       solutionMd: `
 ## Root cause
 
-\`${brokenPat}\` is missing the \`read:org\` scope that \`GET /orgs/:org/repos\` requires.
+\`${brokenPat}\` is missing the \`${variant.scope}\` scope this endpoint requires.
 GitHub answers with 403 \`Resource not accessible by personal access token\` and
-\`X-Accepted-OAuth-Scopes: read:org\` naming exactly what was missing.
+\`X-Accepted-OAuth-Scopes: ${variant.scope}\` naming exactly what was missing.
 
 ## Fix
 
-Use \`${workingPat}\`, which still carries \`read:org\`.
+Use \`${workingPat}\`, which still carries \`${variant.scope}\`.
 `.trim(),
     };
   },

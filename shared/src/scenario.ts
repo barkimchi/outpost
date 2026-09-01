@@ -101,9 +101,20 @@ export interface Step {
   attemptHint?: string;
 }
 
-/** docs/SPEC.md section 7: two kinds of fault, state preferred over intercept. */
+/**
+ * docs/SPEC.md section 7: two kinds of fault, state preferred over intercept.
+ *
+ * `revert` on the state variant is an addition from the Task 3 second fix round:
+ * `Step.clearFaults` (docs/SPEC.md section 7, "removes those fault ids when the step
+ * completes") used to silently no-op for state faults, since a state mutation has no
+ * inherent undo. Optional and additive, not a reshape of the frozen section-8 contract: a
+ * state fault a scenario never references from `clearFaults` needs no `revert` at all. A
+ * scenario that DOES reference a state fault's id from `clearFaults` without giving it a
+ * `revert` is a scenario-authoring bug, caught loudly at activation time
+ * (`engine.ts`'s `activateDef`), not a silent no-op at request time.
+ */
 export type Fault =
-  | { id: string; kind: 'state'; apply(w: World): void }
+  | { id: string; kind: 'state'; apply(w: World): void; revert?(w: World): void }
   | {
       id: string;
       kind: 'intercept';

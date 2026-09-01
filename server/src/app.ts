@@ -18,8 +18,10 @@ import { createGithubRouter } from './platforms/github/router.js';
  *   2. requestLog        wraps res.write/res.end, captures status + body + timing, emits
  *                        a RequestEvent onto the bus. Skips /_trainer/events and
  *                        /_trainer/api/proxy by exact path.
- *   3. faultInjector     consults the engine for an active intercept fault on this request.
- *                        Stub until Task 3 wires the engine in.
+ *   3. faultInjector     consults the engine for an active intercept fault on this request,
+ *                        short-circuiting with its verbatim response when one matches
+ *                        (wired to `engine.activeInterceptFault()` in the Task 3 fix round,
+ *                        see `middleware/faultInjector.ts`).
  *   4. /_trainer         trainer router: health, proxy, SSE now; scenarios API, workspace,
  *                        docs, OAuth callback land here in later tasks.
  *   5. platform routers  /github /google /glean /slack (healthy behavior only). /github

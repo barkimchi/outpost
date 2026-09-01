@@ -173,7 +173,7 @@ const GLEAN_DOC_POOL: Array<{ title: string; body: (company: string) => string }
   { title: 'Release Checklist', body: (co) => `Run the ${co} smoke tests before promoting any build to production.` },
 ];
 
-const SCOPE_EXTRAS = ['workflow', 'gist', 'notifications', 'user:email'];
+const SCOPE_EXTRAS = ['workflow', 'gist', 'user:email'];
 
 const GOOGLE_SCOPES = [
   'openid',
@@ -227,7 +227,12 @@ export function generate(seed: string): RunContext {
 
   const extraScopeCount = rng.int(0, 2);
   const extraScopes = rng.pickN(SCOPE_EXTRAS, extraScopeCount);
-  const scopes = Array.from(new Set(['repo', 'read:org', ...extraScopes]));
+  // "notifications" is a guaranteed baseline scope, not an optional extra (fix round 2):
+  // t2-missing-scope's fault needs to be able to reliably strip it from exactly the
+  // broken token, the same way it relies on "repo" and "read:org" always being present
+  // to strip. If it were only sometimes drawn from SCOPE_EXTRAS, both candidate tokens
+  // could end up already lacking it, breaking the scenario (no valid fix that run).
+  const scopes = Array.from(new Set(['repo', 'read:org', 'notifications', ...extraScopes]));
 
   const validPat = ghpToken(rng);
   const revokedPat = ghpToken(rng);
@@ -247,6 +252,13 @@ export function generate(seed: string): RunContext {
   // fix in the same slot. This is drawn from the same seeded rng as everything else, so
   // it varies per run and a captured seed still reproduces it.
   const brokenCredentialSlot: 'valid' | 'second' = rng.bool(0.5) ? 'valid' : 'second';
+
+  // Second fix round: WHICH scope goes missing, not only which token (spec hard
+  // constraint 7a names this as its own dimension). t2-missing-scope draws between two
+  // real, distinct scope-gated 403 endpoints: GET /orgs/:org/repos (needs read:org) and
+  // GET /notifications (needs notifications), so the specific missing scope varies too,
+  // not just which of the two tokens is missing it.
+  const missingScopeVariant: 'org' | 'notifications' = rng.bool(0.5) ? 'org' : 'notifications';
 
   const channelNames = rng.pickN(CHANNEL_NAME_POOL, rng.int(3, 5));
   const channels = channelNames.map((name) => ({
@@ -307,6 +319,7 @@ export function generate(seed: string): RunContext {
       pageSize: String(pageSize),
       targetRepo: targetRepoEntry.name,
       brokenCredentialSlot,
+      missingScopeVariant,
     },
   };
 }

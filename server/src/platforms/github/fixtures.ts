@@ -109,6 +109,25 @@ export function problemsParsingJson(): { message: string; documentation_url: str
   };
 }
 
+// UNVERIFIED SHAPE: approximated. Added in the Task 3 second fix round for
+// `GET /notifications`, a second real, distinct scope-gated endpoint used by
+// `t2-missing-scope` so which scope goes missing genuinely varies (spec hard constraint
+// 7a names "which scope is missing" as a dimension to randomize, and the pre-fix
+// scenario always stripped read:org from GET /orgs/:org/repos, the only scope-gated
+// endpoint this mock had). The message is GitHub's own generic missing-scope wording
+// (same text as resourceNotAccessible() above, already sourced from docs + community
+// reports); this project never holds real credentials (hard constraint 3), so an
+// authenticated live call was not possible. documentation_url points at the real
+// list-notifications docs page, not repos#get-a-repository, since that would be the
+// wrong endpoint's anchor for this context.
+export function notificationsNotAccessible(): GithubErrorBody {
+  return {
+    message: 'Resource not accessible by personal access token',
+    documentation_url: 'https://docs.github.com/rest/activity/notifications#list-notifications-for-the-authenticated-user',
+    status: '403',
+  };
+}
+
 // UNVERIFIED SHAPE: approximated, for the same reason as problemsParsingJson() above.
 // Modeled on GitHub's documented general validation-error envelope
 // (https://docs.github.com/rest/overview/resources-in-the-rest-api#client-errors):

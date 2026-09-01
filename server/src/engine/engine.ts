@@ -70,6 +70,12 @@ export interface EnginePublicState {
   hintsUnlocked?: number;
   hintsRevealed?: number;
   solutionRevealed?: boolean;
+  /** The CURRENT step's `Step.attemptHint` (fix round 2), spec section 8: "shown when
+   *  match hits but assertions fail." Present whenever a scenario is active and its
+   *  current step defines one, regardless of whether any attempt has happened yet or
+   *  whether this is a drill (the text is contextual troubleshooting guidance, not
+   *  identity-revealing, so drill mode does not hide it). */
+  attemptHint?: string;
 }
 
 export interface ScenarioListEntry {
@@ -92,6 +98,9 @@ interface ActiveRun {
   hintsUnlocked: number;
   hintsRevealed: number;
   solutionRevealed: boolean;
+  /** Every fault this run registered, by id (both kinds), so `clearFaults` can look one
+   *  up regardless of kind (fix round 2). Populated once, at activation; never mutated. */
+  faultsById: Map<string, Fault>;
 }
 
 type InterceptFault = Extract<Fault, { kind: 'intercept' }>;
@@ -194,9 +203,11 @@ export class Engine {
     const ctx = generate(seed);
     resetState(ctx);
     const built = def.build(ctx);
+    this.validateClearFaults(def.id, built);
     const world = activeWorld();
 
-    for (const setupFn of built.setup) setupFn(world);
+    const faultsById = new Map<string, Fault>();
+    for (const fault of built.faults) faultsById.set(fault.id, fault);
 
     this.activeIntercepts.clear();
     for (const fault of built.faults) {
@@ -220,6 +231,7 @@ export class Engine {
       hintsUnlocked: 0,
       hintsRevealed: 0,
       solutionRevealed: false,
+      faultsById,
     };
     this.state = 'active';
     this.bumpRuns(def.id);
@@ -227,6 +239,40 @@ export class Engine {
     const payload = this.buildActivatedPayload();
     this.emit({ type: 'scenario:activated', ts: Date.now(), ...payload });
     return payload;
+  }
+
+  /**
+   * Fail-fast, at activation, on a `clearFaults` id that can never do anything (fix round
+   * 2): either it names no fault the scenario actually registered, or it names a state
+   * fault with no `revert()` to undo it. Both used to be silent no-ops at request time,
+   * deep inside `completeStep()`, giving a scenario author (Task 8's capstone will be the
+   * first to actually stage breakage this way) no signal that anything was wrong. Running
+   * this here, inside `activate()`/`activateDrill()`/`reset()`, means a broken
+   * `clearFaults` reference throws the moment the scenario is activated (caught by any
+   * test that calls `engine.activate(id)`, including the smoke test that already loops
+   * every registered scenario), not lazily only once a learner happens to complete the
+   * specific step that references it. Express converts a synchronous throw from a route
+   * handler into a clean 500 (app.ts's error handler), so this cannot crash the process
+   * the way throwing from inside a bus-event listener (`observe()`, mid live-request)
+   * could.
+   */
+  private validateClearFaults(scenarioId: string, built: BuiltScenario): void {
+    for (const step of built.steps) {
+      for (const id of step.clearFaults ?? []) {
+        const fault = built.faults.find((f) => f.id === id);
+        if (!fault) {
+          throw new Error(
+            `scenario "${scenarioId}": step "${step.id}" clearFaults references unknown fault id "${id}"`,
+          );
+        }
+        if (fault.kind === 'state' && !fault.revert) {
+          throw new Error(
+            `scenario "${scenarioId}": step "${step.id}" clearFaults references state fault "${id}", ` +
+              'which has no revert(). Add one, or drop it from clearFaults.',
+          );
+        }
+      }
+    }
   }
 
   private buildActivatedPayload(): ActivatedPayload {
@@ -275,6 +321,7 @@ export class Engine {
       hintsUnlocked: c.hintsUnlocked,
       hintsRevealed: c.hintsRevealed,
       solutionRevealed: c.solutionRevealed,
+      attemptHint: c.built.steps[c.stepIndex]?.attemptHint,
     };
   }
 
@@ -320,18 +367,15 @@ export class Engine {
   }
 
   /**
-   * `faultInjector` (server/src/middleware/faultInjector.ts) is meant to consult this
-   * before a request reaches the healthy platform routers, short-circuiting with the
-   * fault's verbatim `respond` (docs/SPEC.md section 7). NOT WIRED YET as of this task:
-   * the concurrency note for this task placed `middleware/` off limits while a scoped
-   * review runs against it, so the one-line call site inside `faultInjector.ts` is a
-   * follow-up, not a gap in this method. This is fully implemented and unit-tested
-   * (engine.test.ts) so wiring it in later is exactly one line: call this with a
-   * `MatchableRequest` built from the incoming `req` (method, `pathLower`, query, header
-   * names, using the same lowercasing/trailing-slash-stripping `requestLog.ts` already
-   * does) and short-circuit if it returns non-undefined. None of scenarios 1-7 need an
-   * intercept fault (all are state faults, per the brief's "prefer state faults"
-   * guidance), so nothing in this task's curriculum depends on the wiring existing yet.
+   * `faultInjector` (server/src/middleware/faultInjector.ts) consults this before a
+   * request reaches the healthy platform routers, short-circuiting with the fault's
+   * verbatim `respond` (docs/SPEC.md section 7). Wired in during the first Task 3 fix
+   * round (`faultInjector.ts`'s `createFaultInjector`): it builds a `MatchableRequest`
+   * from the incoming `req` and short-circuits when this returns non-undefined. None of
+   * scenarios 1-7 use an intercept fault (all are state faults, per the brief's "prefer
+   * state faults" guidance), so this path is unit-tested (`faultInjector.test.ts`,
+   * `engine.test.ts`) but not exercised by the current registry's live traffic; ready for
+   * Tasks 6/7's intercept faults.
    */
   activeInterceptFault(req: MatchableRequest): { status: number; headers: Record<string, string>; body: string } | undefined {
     if (this.state !== 'active' || !this.current) return undefined;
@@ -358,7 +402,7 @@ export class Engine {
   private completeStep(step: Step): void {
     const c = this.mustCurrent();
     if (step.clearFaults) {
-      for (const id of step.clearFaults) this.activeIntercepts.delete(id);
+      for (const id of step.clearFaults) this.clearFault(c, id);
     }
     const nextStepIndex = c.stepIndex + 1;
     this.emit({ type: 'scenario:step', ts: Date.now(), stepId: step.id, nextStepIndex });
@@ -369,11 +413,34 @@ export class Engine {
     }
   }
 
+  /**
+   * Actually undoes a fault, by kind (fix round 2; previously this only handled intercept
+   * faults, silently no-oping for state faults). `validateClearFaults` already guaranteed
+   * at activation time that `id` names a registered fault, and that a state fault named
+   * here has a `revert`, so both branches are safe without re-checking.
+   */
+  private clearFault(c: ActiveRun, id: string): void {
+    const fault = c.faultsById.get(id);
+    if (!fault) return; // unreachable given activation-time validation; defensive only
+    if (fault.kind === 'intercept') {
+      this.activeIntercepts.delete(id);
+      return;
+    }
+    fault.revert?.(activeWorld());
+  }
+
   private recordAttempt(step: Step, reason: string): void {
     const c = this.mustCurrent();
     c.attempts += 1;
     this.bumpAttempts(c.def.id);
-    this.emit({ type: 'scenario:attempt', ts: Date.now(), stepId: step.id, attempts: c.attempts, reason });
+    this.emit({
+      type: 'scenario:attempt',
+      ts: Date.now(),
+      stepId: step.id,
+      attempts: c.attempts,
+      reason,
+      attemptHint: step.attemptHint,
+    });
     this.maybeUnlockHint(c);
   }
 

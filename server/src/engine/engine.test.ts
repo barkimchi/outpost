@@ -180,7 +180,13 @@ test('activating the same scenario twice produces different RunContext data end 
 // varies," not just the values. Run each affected scenario several times and confirm the
 // fix is not always in the same slot. ---------------------------------------------------
 
-test('t2-revoked-pat: across 8 activations, the working token is NOT always in the same ticket slot (position varies, not just values)', async () => {
+// Minor fix (round 2): 8 runs carries a real flake rate for a fair 50/50 draw (2 * 0.5^8
+// = 0.78%, roughly one spurious failure every 128 `npm test` runs). 14 runs drops that to
+// 2 * 0.5^14 = 0.012% for six extra activations, cheap insurance against a test that
+// cries wolf and gets ignored.
+const DISTRIBUTION_TEST_RUNS = 14;
+
+test('t2-revoked-pat: across 14 activations, the working token is NOT always in the same ticket slot (position varies, not just values)', async () => {
   const engine = freshEngine();
   const app = buildRealPipelineApp();
   const { server, port } = await listen(app);
@@ -188,7 +194,7 @@ test('t2-revoked-pat: across 8 activations, the working token is NOT always in t
     let firstSlotWorkedCount = 0;
     let secondSlotWorkedCount = 0;
     const seenTicketTexts = new Set<string>();
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < DISTRIBUTION_TEST_RUNS; i++) {
       const activated = engine.activate('t2-revoked-pat');
       seenTicketTexts.add(activated.ticketMd);
       const [tokenA, tokenB] = extractTicketTokens(activated.ticketMd);
@@ -196,12 +202,16 @@ test('t2-revoked-pat: across 8 activations, the working token is NOT always in t
       if (working === tokenA) firstSlotWorkedCount += 1;
       else secondSlotWorkedCount += 1;
     }
-    assert.equal(seenTicketTexts.size, 8, 'every activation must produce distinct ticket text (values still differ every run)');
-    assert.equal(firstSlotWorkedCount + secondSlotWorkedCount, 8);
+    assert.equal(
+      seenTicketTexts.size,
+      DISTRIBUTION_TEST_RUNS,
+      'every activation must produce distinct ticket text (values still differ every run)',
+    );
+    assert.equal(firstSlotWorkedCount + secondSlotWorkedCount, DISTRIBUTION_TEST_RUNS);
     assert.ok(
       firstSlotWorkedCount > 0 && secondSlotWorkedCount > 0,
-      `expected both ticket slots to win at least once across 8 runs; got first-slot=${firstSlotWorkedCount}, second-slot=${secondSlotWorkedCount}. ` +
-        'A 8/0 or 0/8 split would mean the answer position is still fixed, exactly the bug this test guards against.',
+      `expected both ticket slots to win at least once across ${DISTRIBUTION_TEST_RUNS} runs; got first-slot=${firstSlotWorkedCount}, second-slot=${secondSlotWorkedCount}. ` +
+        'An all-one-side split would mean the answer position is still fixed, exactly the bug this test guards against.',
     );
   } finally {
     server.close();
@@ -420,6 +430,345 @@ test('every registered scenario 1-7 builds without throwing, for every scenario 
     }
     assert.equal(scenarioRegistry.length, 7, 'this task ships exactly scenarios 1-7');
   } finally {
+    engine.dispose();
+  }
+});
+
+// --- Fix round 2, Important #1: attemptHint is authored on every step but was reachable
+// nowhere (no event field, getState() omitted it). ---------------------------------------
+
+test('attemptHint reaches both the scenario:attempt event and getState(), distinct from the mechanical reason', async () => {
+  const engine = freshEngine();
+  const events: TrainerEvent[] = [];
+  const onTrainerEvent = (ev: TrainerEvent): void => {
+    events.push(ev);
+  };
+  bus.on('trainer-event', onTrainerEvent);
+  try {
+    engine.activate('t1-wrong-method');
+    const beforeAnyAttempt = engine.getState();
+    assert.equal(
+      beforeAnyAttempt.attemptHint,
+      'Read the Allow header on the 405 response you already got.',
+      'attemptHint is available from getState() even before any attempt happens',
+    );
+
+    const app = buildRealPipelineApp();
+    const { server, port } = await listen(app);
+    try {
+      // POST is the wrong method for this scenario's step matcher (still matches, per
+      // t1-wrong-method's design, so it counts as an attempt rather than being ignored).
+      await fetch(`http://127.0.0.1:${port}/github/user`, { method: 'POST', headers: { authorization: 'token whatever' } });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    } finally {
+      server.close();
+    }
+
+    const attemptEvent = events.find((e): e is Extract<TrainerEvent, { type: 'scenario:attempt' }> => e.type === 'scenario:attempt');
+    assert.ok(attemptEvent, 'expected a scenario:attempt event');
+    assert.equal(attemptEvent.attemptHint, 'Read the Allow header on the 405 response you already got.');
+    assert.notEqual(attemptEvent.reason, attemptEvent.attemptHint, 'reason (mechanical) and attemptHint (human) are distinct fields');
+
+    const afterAttempt = engine.getState();
+    assert.equal(afterAttempt.attemptHint, 'Read the Allow header on the 405 response you already got.');
+  } finally {
+    bus.off('trainer-event', onTrainerEvent);
+    engine.dispose();
+  }
+});
+
+test('getState().attemptHint is undefined for a step that defines none', () => {
+  const fakeDef: ScenarioDef = {
+    id: 'fake-no-hint',
+    tier: 1,
+    track: 'troubleshoot',
+    title: 'fake',
+    platform: 'github',
+    docsRef: [],
+    build(_ctx: RunContext) {
+      return {
+        ticketMd: 'x',
+        setup: [],
+        faults: [],
+        steps: [{ id: 'step-1', title: 'x', match: { pathPattern: '^/github/user$' }, assertions: [] }],
+        hints: [],
+        solutionMd: 'x',
+      };
+    },
+  };
+  const engine = freshEngine([fakeDef]);
+  try {
+    engine.activate('fake-no-hint');
+    assert.equal(engine.getState().attemptHint, undefined);
+  } finally {
+    engine.dispose();
+  }
+});
+
+// --- Fix round 2, Important #2: clearFaults used to silently no-op for state faults. ----
+
+test('clearFaults genuinely reverts a state fault once its step completes', async () => {
+  const revertCalls: string[] = [];
+  const fault: Fault = {
+    id: 'revertible-fault',
+    kind: 'state',
+    apply(w) {
+      const record = w.github.tokens[Object.keys(w.github.tokens)[0] as string];
+      if (record) record.rateLimit.remaining = 0;
+    },
+    revert(w) {
+      revertCalls.push('reverted');
+      for (const record of Object.values(w.github.tokens)) record.rateLimit.remaining = record.rateLimit.limit;
+    },
+  };
+  const fakeDef: ScenarioDef = {
+    id: 'fake-clearable',
+    tier: 1,
+    track: 'troubleshoot',
+    title: 'fake',
+    platform: 'github',
+    docsRef: [],
+    build(ctx: RunContext) {
+      return {
+        ticketMd: 'x',
+        setup: [],
+        faults: [fault],
+        steps: [
+          {
+            id: 'step-1',
+            title: 'trigger the fault to clear',
+            match: { method: 'GET', pathPattern: '^/github/rate_limit$' },
+            assertions: [{ kind: 'status', equals: 200 }],
+            clearFaults: ['revertible-fault'],
+          },
+          {
+            id: 'step-2',
+            title: 'prove the budget is back',
+            match: { method: 'GET', pathPattern: '^/github/user$' },
+            assertions: [
+              { kind: 'status', equals: 200 },
+              { kind: 'headerEquals', name: 'x-ratelimit-remaining', equals: String(ctx.github.rateLimit - 1) },
+            ],
+          },
+        ],
+        hints: [],
+        solutionMd: 'x',
+      };
+    },
+  };
+  const engine = freshEngine([fakeDef]);
+  try {
+    engine.activate('fake-clearable');
+    const app = buildRealPipelineApp();
+    const { server, port } = await listen(app);
+    try {
+      const world = activeWorld();
+      const anyToken = Object.keys(world.github.tokens)[0] as string;
+      assert.equal(world.github.tokens[anyToken]?.rateLimit.remaining, 0, 'sanity: the fault applied at activation');
+
+      // Step 1: GET /rate_limit does not itself charge budget (real GitHub behavior,
+      // already relied on elsewhere in this router), so it can report the zeroed budget
+      // without the assertion racing the charge.
+      const res1 = await fetch(`http://127.0.0.1:${port}/github/rate_limit`, { headers: { authorization: `token ${anyToken}` } });
+      assert.equal(res1.status, 200);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      assert.deepEqual(revertCalls, ['reverted'], 'revert() must run when step 1 completes, clearing the fault');
+      assert.equal(engine.getState().currentStepIndex, 1);
+
+      // Step 2: with the budget genuinely restored, the request now succeeds with a
+      // fresh remaining count, proving revert() actually mutated the live World, not
+      // just that the function was called.
+      const res2 = await fetch(`http://127.0.0.1:${port}/github/user`, { headers: { authorization: `token ${anyToken}` } });
+      assert.equal(res2.status, 200);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(engine.getState().state, 'explaining');
+    } finally {
+      server.close();
+    }
+  } finally {
+    engine.dispose();
+  }
+});
+
+test('activate() throws immediately, at activation, when clearFaults names an id no fault registered', () => {
+  const fakeDef: ScenarioDef = {
+    id: 'fake-bad-clearfaults-unknown',
+    tier: 1,
+    track: 'troubleshoot',
+    title: 'fake',
+    platform: 'github',
+    docsRef: [],
+    build(_ctx: RunContext) {
+      return {
+        ticketMd: 'x',
+        setup: [],
+        faults: [],
+        steps: [
+          {
+            id: 'step-1',
+            title: 'x',
+            match: { pathPattern: '^/github/user$' },
+            assertions: [],
+            clearFaults: ['this-id-does-not-exist'],
+          },
+        ],
+        hints: [],
+        solutionMd: 'x',
+      };
+    },
+  };
+  const engine = freshEngine([fakeDef]);
+  try {
+    assert.throws(() => engine.activate('fake-bad-clearfaults-unknown'), /clearFaults references unknown fault id "this-id-does-not-exist"/);
+  } finally {
+    engine.dispose();
+  }
+});
+
+test('activate() throws immediately, at activation, when clearFaults names a state fault with no revert()', () => {
+  const faultWithoutRevert: Fault = {
+    id: 'no-revert-fault',
+    kind: 'state',
+    apply(_w) {
+      /* no-op for this test */
+    },
+  };
+  const fakeDef: ScenarioDef = {
+    id: 'fake-bad-clearfaults-no-revert',
+    tier: 1,
+    track: 'troubleshoot',
+    title: 'fake',
+    platform: 'github',
+    docsRef: [],
+    build(_ctx: RunContext) {
+      return {
+        ticketMd: 'x',
+        setup: [],
+        faults: [faultWithoutRevert],
+        steps: [
+          {
+            id: 'step-1',
+            title: 'x',
+            match: { pathPattern: '^/github/user$' },
+            assertions: [],
+            clearFaults: ['no-revert-fault'],
+          },
+        ],
+        hints: [],
+        solutionMd: 'x',
+      };
+    },
+  };
+  const engine = freshEngine([fakeDef]);
+  try {
+    assert.throws(
+      () => engine.activate('fake-bad-clearfaults-no-revert'),
+      /clearFaults references state fault "no-revert-fault", which has no revert\(\)/,
+    );
+  } finally {
+    engine.dispose();
+  }
+});
+
+test('clearFaults still works for intercept faults (the pre-existing, already-correct path)', () => {
+  const intercept: Fault = {
+    id: 'clearable-intercept',
+    kind: 'intercept',
+    match: { method: 'GET', pathPattern: '^/slack/api/auth\\.test$' },
+    respond: { status: 500, headers: {}, body: '{}' },
+  };
+  const fakeDef: ScenarioDef = {
+    id: 'fake-clearable-intercept',
+    tier: 1,
+    track: 'troubleshoot',
+    title: 'fake',
+    platform: 'slack',
+    docsRef: [],
+    build(_ctx: RunContext) {
+      return {
+        ticketMd: 'x',
+        setup: [],
+        faults: [intercept],
+        steps: [
+          {
+            id: 'step-1',
+            title: 'x',
+            match: { method: 'GET', pathPattern: '^/github/user$' },
+            assertions: [{ kind: 'status', equals: 401 }],
+            clearFaults: ['clearable-intercept'],
+          },
+        ],
+        hints: [],
+        solutionMd: 'x',
+      };
+    },
+  };
+  const engine = freshEngine([fakeDef]);
+  try {
+    const req: MatchableRequest = { method: 'GET', pathLower: '/slack/api/auth.test', query: {}, headerNames: [] };
+    engine.activate('fake-clearable-intercept');
+    assert.deepEqual(engine.activeInterceptFault(req), intercept.respond);
+  } finally {
+    engine.dispose();
+  }
+});
+
+// --- Fix round 2, Important #3: WHICH scope is missing, not just which token. -----------
+
+test('t2-missing-scope: across enough activations, both real scope-gated endpoints (org listing and notifications) get drawn', () => {
+  const engine = freshEngine();
+  try {
+    const seenPaths = new Set<string>();
+    for (let i = 0; i < DISTRIBUTION_TEST_RUNS; i++) {
+      const activated = engine.activate('t2-missing-scope');
+      const step = activated.steps?.[0];
+      assert.ok(step, 'expected exactly one step');
+      // No HTTP call needed for this check: the endpoint choice is already observable
+      // from the activated payload's step title.
+      seenPaths.add(step.title);
+    }
+    const sawOrgVariant = [...seenPaths].some((t) => t.startsWith('List repos in'));
+    const sawNotificationsVariant = [...seenPaths].some((t) => t === 'List notifications');
+    assert.ok(
+      sawOrgVariant && sawNotificationsVariant,
+      `expected both the org-listing and notifications variants across ${DISTRIBUTION_TEST_RUNS} runs; saw step titles: ${[...seenPaths].join(', ')}`,
+    );
+  } finally {
+    engine.dispose();
+  }
+});
+
+test('t2-missing-scope: the notifications variant is genuinely solvable end to end (real GET /notifications, real 403 then real 200)', async () => {
+  const engine = freshEngine();
+  const app = buildRealPipelineApp();
+  const { server, port } = await listen(app);
+  try {
+    // Activate repeatedly until the notifications variant is drawn (bounded: a 50/50
+    // draw not landing on one side in 50 tries would itself indicate a real bug).
+    let activated = engine.activate('t2-missing-scope');
+    let tries = 0;
+    while (activated.steps?.[0]?.title !== 'List notifications' && tries < 50) {
+      activated = engine.activate('t2-missing-scope');
+      tries += 1;
+    }
+    assert.equal(activated.steps?.[0]?.title, 'List notifications', 'notifications variant never drawn in 50 tries');
+
+    const [tokenA, tokenB] = extractTicketTokens(activated.ticketMd);
+    const world = activeWorld();
+    const brokenToken = world.github.tokens[tokenA]?.scopes.includes('notifications') ? tokenB : tokenA;
+    const workingToken = brokenToken === tokenA ? tokenB : tokenA;
+
+    const badRes = await fetch(`http://127.0.0.1:${port}/github/notifications`, { headers: { authorization: `token ${brokenToken}` } });
+    assert.equal(badRes.status, 403);
+    assert.equal(badRes.headers.get('x-accepted-oauth-scopes'), 'notifications');
+
+    const goodRes = await fetch(`http://127.0.0.1:${port}/github/notifications`, { headers: { authorization: `token ${workingToken}` } });
+    assert.equal(goodRes.status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(engine.getState().state, 'explaining');
+  } finally {
+    server.close();
     engine.dispose();
   }
 });

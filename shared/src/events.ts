@@ -106,6 +106,13 @@ export interface ScenarioActivatedEvent {
  * "'right endpoint, still 401'", "'200 but the body has 0 repos, expected at least 1'").
  * Never empty (spec hard constraint 9: "Attempt feedback always says why it didn't
  * count").
+ *
+ * `attemptHint` (Task 3 second fix round) carries the current step's `Step.attemptHint`
+ * (spec section 8: "shown when match hits but assertions fail"), when the scenario
+ * author wrote one. Every scenario in this registry writes one, but until this round no
+ * event or state payload ever surfaced it: `reason` is mechanical ("expected status 200,
+ * got 401"), `attemptHint` is the author's human nudge, and the two are deliberately
+ * separate fields so a consumer can show both, distinctly.
  */
 export interface ScenarioAttemptEvent {
   type: 'scenario:attempt';
@@ -113,6 +120,7 @@ export interface ScenarioAttemptEvent {
   stepId: string;
   attempts: number;
   reason: string;
+  attemptHint?: string;
 }
 
 /** A step's match and all its assertions passed; the engine advanced to the next step. */

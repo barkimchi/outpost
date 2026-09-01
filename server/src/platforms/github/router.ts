@@ -8,6 +8,7 @@ import {
   methodNotAllowedFixture,
   missingNameField,
   notFoundFixture,
+  notificationsNotAccessible,
   orgReposNotFound,
   problemsParsingJson,
   rateLimitExceeded,
@@ -44,6 +45,11 @@ const DEFAULT_PER_PAGE = 30;
 const MAX_PER_PAGE = 100;
 const ORG_REPOS_REQUIRED_SCOPE = 'read:org';
 const PRIVATE_REPO_REQUIRED_SCOPE = 'repo';
+// Task 3 second fix round: a second, distinct real scope-gated 403 endpoint (real
+// GitHub's GET /notifications requires the "notifications" scope on a classic PAT), so
+// t2-missing-scope's fault has a genuine second option for which scope goes missing,
+// instead of always read:org (spec hard constraint 7a).
+const NOTIFICATIONS_REQUIRED_SCOPE = 'notifications';
 
 function githubRequestId(): string {
   // Real GitHub's x-github-request-id is groups of hex digits joined by colons, e.g.
@@ -371,6 +377,33 @@ export function createGithubRouter(): Router {
         resources: { core, graphql, search },
         rate: core,
       });
+    })
+    .all((_req, res) => methodNotAllowed(res));
+
+  router
+    .route('/notifications')
+    .get((req, res) => {
+      // Real GitHub endpoint: "List notifications for the authenticated user". Added in
+      // the Task 3 second fix round so t2-missing-scope has a second real scope-gated
+      // 403 to draw from (see the NOTIFICATIONS_REQUIRED_SCOPE comment above).
+      const requestId = githubRequestId();
+      const auth = authenticateOrRespond(req, res);
+      if (!auth) return;
+      const world = activeWorld();
+      if (!chargeRateLimitOrRespond(res, auth.record, world.github.user.id, requestId)) return;
+
+      applyStandardHeaders(res, auth.record, requestId);
+      res.set('x-accepted-oauth-scopes', NOTIFICATIONS_REQUIRED_SCOPE);
+
+      if (!auth.record.scopes.includes(NOTIFICATIONS_REQUIRED_SCOPE)) {
+        res.status(403).json(notificationsNotAccessible());
+        return;
+      }
+
+      // Success body is a reasonable approximation (an empty notification list), not
+      // asserted byte-exact by any scenario, same convention as this file's other
+      // success bodies: only the error fixtures carry that requirement.
+      res.json([]);
     })
     .all((_req, res) => methodNotAllowed(res));
 

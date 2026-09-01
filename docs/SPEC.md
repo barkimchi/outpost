@@ -409,12 +409,23 @@ Ids are stable. `#` = order in the registry.
 3. `t1-content-type`: JSON body sent without `Content-Type: application/json` → 400.
 
 **Tier 2: GitHub (`t2-github.ts`)**
-4. `t2-revoked-pat`: 401 `Bad credentials`; fix by using the run's valid PAT.
+
+Per hard constraint 7a, every scenario below hands over two neutrally-labeled candidate
+tokens ("Token 1" / "Token 2", not "the wired-in one" / "the spare"); which one is
+actually broken is randomized per run, so the fix is found by testing both, never by
+position.
+
+4. `t2-revoked-pat`: 401 `Bad credentials` from whichever token was revoked; fix by
+   switching to the other.
 5. `t2-missing-scope`: 403; diagnose via `X-OAuth-Scopes` vs `X-Accepted-OAuth-Scopes`.
+   Which scope is missing is itself randomized between two real, distinct scope-gated
+   endpoints (`GET /orgs/:org/repos` needing `read:org`, `GET /notifications` needing
+   `notifications`), not just which token has it.
 6. `t2-private-404`: private repo returns **404 not 403** (GitHub's privacy behavior);
-   the lesson is that 404 can mean "no permission".
-7. `t2-rate-limit`: 403 + `x-ratelimit-remaining: 0`; read `x-ratelimit-reset`, switch
-   to the second PAT.
+   the lesson is that 404 can mean "no permission". The token missing the `repo` scope
+   is randomized between the two candidates.
+7. `t2-rate-limit`: 403 + `x-ratelimit-remaining: 0` from whichever token is exhausted;
+   read `x-ratelimit-reset`, switch to the other token.
 
 **Tier 3: Google OAuth (`t3-google.ts`)**
 8. `t3-redirect-mismatch`: wrong callback URL in the OAuth helper.
