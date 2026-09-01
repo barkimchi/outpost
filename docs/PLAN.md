@@ -142,11 +142,32 @@ curl -s -X POST http://127.0.0.1:4600/_trainer/api/proxy -H 'content-type: appli
 
 Read spec §5, §7.
 
-**Build:**
+**First, a small cross-cutting addition (do this before the GitHub work):**
+Add `scripts/check-style.mjs` and wire it as root `npm run lint:style`, also called from
+`npm test`. It fails with a non-zero exit and a file:line list if it finds:
+- an em-dash (U+2014) or en-dash (U+2013) in any tracked `.ts`, `.tsx`, `.md`, `.json`, or
+  `.mjs` file, EXCLUDING `docs/reference/**` (archived documents from another session,
+  preserved verbatim on purpose) and `package-lock.json`.
+- the literal string `4700` anywhere outside `docs/SPEC.md` (that port belongs to a
+  different long-running process on this machine and must never be reintroduced).
+
+No em-dashes is the project owner's hard style rule and it has already been violated once
+across the spec, the plan, and the ledger. A grep in CI is cheaper than remembering. Keep
+the script dependency-free and under 60 lines.
+
+**Then the GitHub work:**
+- **`shared/src/scenario.ts`: author the COMPLETE type file, exactly as spec §8 defines
+  it.** All of it: `RunContext` (including `vars`), `Assertion` (including the `custom`
+  escape hatch), `RequestMatcher`, `Step`, `Fault`, `BuiltScenario`, `ScenarioDef`. These
+  are pure type declarations, fully specified in the spec, and cheap to write. Task 3
+  implements against them and may extend but must not reshape them. Do NOT resurrect the
+  superseded drafts in `docs/reference/superseded-drafts/`; they contradict spec §8 and
+  were removed for that reason. Write from the spec.
 - `server/src/platforms/world.ts`: the `World` type holding all mutable per-run state for
   all four platforms, plus `resetState(ctx: RunContext)` and `activeWorld()`. Task 3
-  generates the `RunContext`; for now accept a hand-built one so this task can run
-  standalone. Rate-limit counters, token registries, and channel membership all live here.
+  generates the `RunContext`; for now build one by hand in a test fixture so this task can
+  run standalone. Rate-limit counters, token registries, and channel membership all live
+  here.
 - `server/src/platforms/github/fixtures.ts`: byte-exact error bodies with `// source:`
   comments. At minimum:
   - 401 `{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest","status":"401"}`
