@@ -26,6 +26,9 @@ import { loadPersistedUi, savePersistedUi } from './persistence.js';
 import { TrainerApiError } from '../types.js';
 import { buildResolvedRequest } from '../lib/buildRequest.js';
 import { flattenEnvVars } from '../lib/vars.js';
+import { statusText } from '../lib/format.js';
+import { runScript } from '../scripts/run.js';
+import type { EnvPatch, TestResult } from '../scripts/run.js';
 import { buildUrlWithParams, parseUrlParams } from '../lib/urlParams.js';
 import {
   deleteCollection as deleteCollectionTree,
@@ -120,6 +123,14 @@ export interface StoreState {
   sending: boolean;
   errorMessage: string | null;
   ui: UiSlice;
+
+  // --- Script engine results (docs/SPEC.md section 14, Task 9) ------------------------
+  // The most recent send's Tests-script pass/fail rows and combined Pre-request+Tests
+  // console.log output. Reset at the start of every `sendRequest` call and whenever the
+  // request builder loads a different request, so a stale run's results never linger
+  // against a request they did not come from.
+  testResults: TestResult[];
+  consoleLines: string[];
 
   // --- Workspace (docs/SPEC.md section 4/10/13) ---------------------------------------
   workspaceLoaded: boolean;
@@ -333,6 +344,44 @@ export const useStore = create<StoreState>((set, get) => {
     scheduleWorkspaceSave();
   }
 
+  /** Applies a script's `envPatch` (spec section 14: "Its envPatch is applied to the
+   *  environment, and the request is then resolved against the updated environment").
+   *  When there is an active environment, this genuinely mutates its persisted variable
+   *  rows (adding a row for a new key, updating an existing one and forcing it enabled,
+   *  or removing one on `unset`), matching real Postman: `pm.environment.set` is visible
+   *  afterward in the Environment editor, not a one-request-only overlay. Without an
+   *  active environment there is nowhere to persist to, so the patch is applied only to
+   *  the in-memory vars map returned here, for this one send. Returns the resulting
+   *  flattened vars map either way, so the caller always has an up-to-date map to resolve
+   *  `{{vars}}` against next. */
+  function applyEnvPatchToActiveEnvironment(patch: EnvPatch): Record<string, string> {
+    const envId = get().activeEnvironmentId;
+    if (envId === null) {
+      const vars = { ...activeVarsFromState(get()) };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete vars[key];
+        else vars[key] = value;
+      }
+      return vars;
+    }
+    const environments = get().environments.map((env) => {
+      if (env.id !== envId) return env;
+      let variables = env.variables;
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) {
+          variables = variables.filter((v) => v.key !== key);
+          continue;
+        }
+        const idx = variables.findIndex((v) => v.key === key);
+        variables = idx === -1 ? [...variables, { id: crypto.randomUUID(), key, value, enabled: true }] : variables.map((v, i) => (i === idx ? { ...v, value, enabled: true } : v));
+      }
+      return { ...env, variables };
+    });
+    set({ environments });
+    scheduleWorkspaceSave();
+    return activeVarsFromState({ environments, activeEnvironmentId: envId });
+  }
+
   return {
     serverPort: null,
     connectionStatus: 'connecting',
@@ -346,6 +395,9 @@ export const useStore = create<StoreState>((set, get) => {
     sending: false,
     errorMessage: null,
     ui: { ...loadPersistedUi(), ...defaultWorkspaceUi(), activeReferenceTab: 'ticket', responseViewMode: 'pretty', activeRequestTab: 'params' },
+
+    testResults: [],
+    consoleLines: [],
 
     workspaceLoaded: false,
     collections: [],
@@ -482,7 +534,7 @@ export const useStore = create<StoreState>((set, get) => {
       set({ scenarioEpoch: epoch });
       try {
         const payload = await trainerApi.activate(id);
-        if (get().scenarioEpoch === epoch) set({ scenario: activatedPayloadToSlice(payload), response: null, errorMessage: null });
+        if (get().scenarioEpoch === epoch) set({ scenario: activatedPayloadToSlice(payload), response: null, errorMessage: null, testResults: [], consoleLines: [] });
       } catch (err) {
         if (get().scenarioEpoch === epoch) set({ errorMessage: `Could not activate ${id}: ${messageFromError(err)}` });
       }
@@ -493,7 +545,7 @@ export const useStore = create<StoreState>((set, get) => {
       set({ scenarioEpoch: epoch });
       try {
         const payload = await trainerApi.activateDrill(tier);
-        if (get().scenarioEpoch === epoch) set({ scenario: activatedPayloadToSlice(payload), response: null, errorMessage: null });
+        if (get().scenarioEpoch === epoch) set({ scenario: activatedPayloadToSlice(payload), response: null, errorMessage: null, testResults: [], consoleLines: [] });
       } catch (err) {
         if (get().scenarioEpoch === epoch) set({ errorMessage: `Could not start a drill: ${messageFromError(err)}` });
       }
@@ -505,7 +557,7 @@ export const useStore = create<StoreState>((set, get) => {
       try {
         await trainerApi.resetScenario();
         const state = await trainerApi.getState();
-        if (get().scenarioEpoch === epoch) set({ scenario: engineStateToSlice(state), response: null, errorMessage: null });
+        if (get().scenarioEpoch === epoch) set({ scenario: engineStateToSlice(state), response: null, errorMessage: null, testResults: [], consoleLines: [] });
       } catch (err) {
         if (get().scenarioEpoch === epoch) set({ errorMessage: `Could not reset: ${messageFromError(err)}` });
       }
@@ -647,7 +699,7 @@ export const useStore = create<StoreState>((set, get) => {
     },
 
     newRequestDraft() {
-      set({ request: defaultSavedRequest(crypto.randomUUID()), draftLinkedTo: null, response: null });
+      set({ request: defaultSavedRequest(crypto.randomUUID()), draftLinkedTo: null, response: null, testResults: [], consoleLines: [] });
       scheduleWorkspaceSave();
     },
 
@@ -658,7 +710,31 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
 
-      const vars = activeVarsFromState(get());
+      set({ sending: true, errorMessage: null, testResults: [], consoleLines: [] });
+      const consoleLines: string[] = [];
+      const testResults: TestResult[] = [];
+
+      // Pipeline order (docs/SPEC.md section 14, this task's brief): pre-request script,
+      // apply envPatch, resolve {{vars}}, proxy call, response, tests script. `vars` is
+      // reassigned after the pre-request script runs so resolution below sees whatever it
+      // wrote (e.g. a computed HMAC signature), not the environment as it stood before.
+      let vars = activeVarsFromState(get());
+
+      if (request.scripts.preRequest.trim() !== '') {
+        // Best-effort resolution against the CURRENT environment, purely to give the
+        // script something meaningful to read via `pm.request`; `missing` is not checked
+        // here; the real, load-bearing missing-variable check happens once, below, against
+        // the environment as the pre-request script actually left it.
+        const preview = buildResolvedRequest(request, vars);
+        const preResult = await runScript(request.scripts.preRequest, {
+          environment: vars,
+          request: { method: preview.method, url: preview.url, headers: preview.headers, body: preview.body },
+        });
+        consoleLines.push(...preResult.consoleLines);
+        if (Object.keys(preResult.envPatch).length > 0) vars = applyEnvPatchToActiveEnvironment(preResult.envPatch);
+        if (preResult.error) testResults.push({ name: 'Pre-request script', passed: false, error: preResult.error });
+      }
+
       const resolved = buildResolvedRequest(request, vars);
 
       // Never render a secret as unresolvable and silently send the literal `{{token}}`
@@ -667,6 +743,9 @@ export const useStore = create<StoreState>((set, get) => {
       if (resolved.missing.length > 0) {
         const list = resolved.missing.map((name) => `{{${name}}}`).join(', ');
         set({
+          sending: false,
+          testResults,
+          consoleLines,
           errorMessage: `Undefined variable${resolved.missing.length > 1 ? 's' : ''}: ${list}. Set ${
             resolved.missing.length > 1 ? 'them' : 'it'
           } in the active environment before sending.`,
@@ -674,9 +753,9 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
 
-      set({ sending: true, errorMessage: null });
+      let proxyResult: Awaited<ReturnType<typeof trainerApi.proxy>> | null = null;
       try {
-        const result = await trainerApi.proxy({
+        proxyResult = await trainerApi.proxy({
           method: resolved.method,
           url: resolved.url,
           headers: resolved.headers,
@@ -685,18 +764,37 @@ export const useStore = create<StoreState>((set, get) => {
         set({
           response: {
             kind: 'success',
-            status: result.status,
-            headers: result.headers,
-            body: result.body,
-            timeMs: result.timeMs,
-            sizeBytes: result.sizeBytes,
+            status: proxyResult.status,
+            headers: proxyResult.headers,
+            body: proxyResult.body,
+            timeMs: proxyResult.timeMs,
+            sizeBytes: proxyResult.sizeBytes,
           },
         });
       } catch (err) {
-        set({ response: { kind: 'error', message: messageFromError(err) } });
-      } finally {
-        set({ sending: false });
+        set({ sending: false, response: { kind: 'error', message: messageFromError(err) }, testResults, consoleLines });
+        return;
       }
+
+      if (request.scripts.test.trim() !== '') {
+        const testResult = await runScript(request.scripts.test, {
+          environment: vars,
+          request: { method: resolved.method, url: resolved.url, headers: resolved.headers, body: resolved.body },
+          response: {
+            status: proxyResult.status,
+            statusText: statusText(proxyResult.status),
+            headers: proxyResult.headers,
+            body: proxyResult.body,
+            timeMs: proxyResult.timeMs,
+          },
+        });
+        consoleLines.push(...testResult.consoleLines);
+        testResults.push(...testResult.testResults);
+        if (testResult.error) testResults.push({ name: 'Tests script', passed: false, error: testResult.error });
+        if (Object.keys(testResult.envPatch).length > 0) applyEnvPatchToActiveEnvironment(testResult.envPatch);
+      }
+
+      set({ sending: false, testResults, consoleLines });
     },
 
     // --- Collections --------------------------------------------------------------------
@@ -743,7 +841,7 @@ export const useStore = create<StoreState>((set, get) => {
     loadRequestFromCollection(collectionId, itemId) {
       const item = findRequestItem(get().collections, collectionId, itemId);
       if (!item) return;
-      set({ request: item.request, draftLinkedTo: { collectionId, itemId }, response: null });
+      set({ request: item.request, draftLinkedTo: { collectionId, itemId }, response: null, testResults: [], consoleLines: [] });
       scheduleWorkspaceSave();
     },
 

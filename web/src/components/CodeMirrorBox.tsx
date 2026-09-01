@@ -5,6 +5,7 @@ import type { Extension } from '@codemirror/state';
 import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { json } from '@codemirror/lang-json';
+import { javascript } from '@codemirror/lang-javascript';
 
 /**
  * The one CodeMirror 6 wrapper used for the request body editor and the response panel's
@@ -89,7 +90,7 @@ export interface CodeMirrorBoxProps {
   value: string;
   onChange?: (value: string) => void;
   readOnly?: boolean;
-  language?: 'json' | 'none';
+  language?: 'json' | 'javascript' | 'none';
   className?: string;
   /** Enabled-only flattened environment variables (`lib/vars.ts`'s `flattenEnvVars`). When
    *  provided, every `{{var}}` span in the document is highlighted, resolved vs missing.
@@ -116,6 +117,7 @@ export function CodeMirrorBox({ value, onChange, readOnly = false, language = 'n
     const varCompartment = varCompartmentRef.current;
     const extensions: Extension[] = [basicSetup, darkTheme, EditorView.lineWrapping, varCompartment.of(vars ? varHighlightExtension(vars) : [])];
     if (language === 'json') extensions.push(json());
+    if (language === 'javascript') extensions.push(javascript());
     if (readOnly) {
       extensions.push(EditorState.readOnly.of(true), EditorView.editable.of(false));
     } else {
