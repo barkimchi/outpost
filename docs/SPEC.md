@@ -15,10 +15,15 @@ Train first, showcase second.
 
 ## 2. Hard constraints (never violate)
 
-1. **Single process, single port.** Default `4700` (override with `PORT`). Prod mode
+1. **Single process, single port.** Default `4800` (override with `PORT`). Prod mode
    serves `web/dist` from the same port. `npm start` is the only command a user needs.
-   *(4700 not 4600: a stray `python -m http.server 4600` has held 4600 for 41 days on
-   this machine. `PORT` makes the choice one env var wide.)*
+   *(Neither 4600 nor 4700 is usable on this machine. 4600 is held by a stray orphaned
+   `python -m http.server`. 4700 is held by Bar's LIVE Atrics client-site preview
+   (`python -m http.server 4700 --bind 127.0.0.1`, tmux session `atrics-web`, running
+   since Aug 5) which must NOT be killed. Because that one binds `127.0.0.1`
+   specifically, a gym server on `0.0.0.0:4700` binds successfully yet is unreachable at
+   the documented `127.0.0.1` fallback: a silent failure, which is why the default moved
+   rather than being worked around.)*
 2. **Listen on `0.0.0.0`.** Document `127.0.0.1` as the fallback base URL for
    IPv6-first resolution. Postman **desktop** only — the web client cannot reach localhost.
 3. **No real credentials, ever.** No network egress to real GitHub/Google/Glean/Slack.
@@ -51,7 +56,7 @@ Train first, showcase second.
 - Web: React 18, Vite 5, TypeScript, Zustand, Tailwind 3, CodeMirror 6.
 - Persistence: `data/progress.json`, `data/workspace.json` (both gitignored, written
   atomically via write-temp-then-rename, debounced 250ms).
-- Dev: Vite on 5173 proxying `/_trainer`, `/github`, `/google`, `/glean`, `/slack` to 4700.
+- Dev: Vite on 5173 proxying `/_trainer`, `/github`, `/google`, `/glean`, `/slack` to 4800.
 
 ## 4. File tree
 
@@ -156,6 +161,11 @@ Mount order is load-bearing. Any reordering is a defect.
 `requestLog` sits **above** `faultInjector` so intercepted responses are logged exactly
 like organic ones. The bus fans out to (a) SSE `log` events and (b) `engine.observe(ev)`.
 
+`requestLog` **must not log the SSE route itself.** Logging `/_trainer/events` emits a
+log event, which the stream then delivers, which is a feedback loop. Skip the SSE path by
+path match, not only by content type, and skip `/_trainer/api/proxy` request logging too:
+the proxied inner request is the one that matters and is logged on its own way through.
+
 Bus: `EventEmitter` + a 200-entry ring buffer replayed to each new SSE client.
 
 ## 7. Fault model
@@ -210,6 +220,10 @@ export interface RunContext {
     botToken: string; signingSecret: string; teamId: string; botUserId: string;
     channels: Array<{ id: string; name: string; isMember: boolean }>;
   };
+  /** Extra per-run template values that do not belong to one platform: which field is
+   *  malformed this run, the cursor contents, a page size, a reset epoch. Ticket text,
+   *  docs callouts, and assertions read from here so they stay data-driven. */
+  vars: Record<string, string>;
 }
 
 export type Assertion =
@@ -221,7 +235,11 @@ export type Assertion =
   | { kind:'headerMatches';   name: string; matches: string }
   | { kind:'bodyMatches';     matches: string }
   | { kind:'reqHeaderMatches';name: string; matches: string }
-  | { kind:'reqJsonPath';     path: string; equals?: unknown; matches?: string; exists?: boolean };
+  | { kind:'reqJsonPath';     path: string; equals?: unknown; matches?: string; exists?: boolean }
+  /** Escape hatch for a check the declarative kinds cannot express (a decoded cursor, a
+   *  recomputed HMAC). Resolved by id in engine/assert.ts against a small registry.
+   *  Use sparingly: a scenario made entirely of custom assertions is unreviewable. */
+  | { kind:'custom';          id: string };
 
 export interface RequestMatcher {
   method?: string | string[];
@@ -333,7 +351,7 @@ The riskiest module. Requirements:
 - **Registered redirect URIs** (exactly these two):
   - `https://oauth.pstmn.io/v1/callback` (real Postman intercepts the navigation; the URL
     is never actually fetched. **"Authorize using browser" must be UNCHECKED.**)
-  - `http://localhost:4700/_trainer/oauth/callback` (built-in UI popup → `postMessage`)
+  - `http://localhost:4800/_trainer/oauth/callback` (built-in UI popup → `postMessage`)
 - Anything else → `400` HTML page reading **Error 400: redirect_uri_mismatch**.
 - `POST /google/oauth2/token` supports `grant_type=authorization_code` and
   `grant_type=refresh_token`. Codes are single-use, 60s TTL. Errors:

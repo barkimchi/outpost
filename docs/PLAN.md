@@ -9,7 +9,7 @@ Note the space in the path: quote it in every shell command.
 
 These bind every task. A reviewer treats a violation as an Important finding.
 
-1. **Port 4700**, `PORT` env override, listen on `0.0.0.0`. One process, one port.
+1. **Port 4800**, `PORT` env override, listen on `0.0.0.0`. One process, one port.
 2. **No em-dashes anywhere in user-facing copy** (tickets, docs, README, UI strings, error
    text). Use commas, periods, semicolons, or separate sentences. This is a hard style rule.
 3. **No real credentials, no network egress** to real GitHub/Google/Glean/Slack. Every
@@ -64,11 +64,11 @@ Create the workspace skeleton so every later task has somewhere to land.
 - `data/.gitkeep`.
 - `shared/`: package `@gym/shared`, builds to `dist`, empty-but-valid `src/index.ts`.
 - `server/`: package `@gym/server`, Express 4, `src/config.ts` (PORT from env, default
-  4700), `src/app.ts` exporting `createApp()`, `src/index.ts` calling
+  4800), `src/app.ts` exporting `createApp()`, `src/index.ts` calling
   `app.listen(PORT, '0.0.0.0')`. One route: `GET /_trainer/api/health` →
   `{ok:true, version, port}`.
 - `web/`: React 18 + Vite + TS + Tailwind. `vite.config.ts` proxies `/_trainer`,
-  `/github`, `/google`, `/glean`, `/slack` to `http://127.0.0.1:4700`. A placeholder
+  `/github`, `/google`, `/glean`, `/slack` to `http://127.0.0.1:4800`. A placeholder
   `App.tsx` that fetches `/_trainer/api/health` and renders the result.
 - Server in production mode serves `web/dist` statically with an SPA fallback that does
   **not** swallow `/github`, `/google`, `/glean`, `/slack`, or `/_trainer`.
@@ -80,12 +80,12 @@ npm install
 npm run typecheck
 npm run dev:server &   # or tsx server/src/index.ts
 sleep 2
-curl -s http://127.0.0.1:4700/_trainer/api/health          # -> {"ok":true,...}
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4700/nope   # -> 404
+curl -s http://127.0.0.1:4800/_trainer/api/health          # -> {"ok":true,...}
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4800/nope   # -> 404
 kill %1
 npm run build && node server/dist/index.js &
 sleep 2
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4700/       # -> 200 (index.html)
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4800/       # -> 200 (index.html)
 kill %1
 ```
 
@@ -126,13 +126,13 @@ Read spec §6 and §10 first.
 **Verify (run these, paste output):**
 ```bash
 # terminal A
-curl -N http://127.0.0.1:4700/_trainer/events &
+curl -N http://127.0.0.1:4800/_trainer/events &
 # terminal B
-curl -s -X POST http://127.0.0.1:4700/_trainer/api/proxy \
+curl -s -X POST http://127.0.0.1:4800/_trainer/api/proxy \
   -H 'content-type: application/json' \
-  -d '{"method":"GET","url":"http://127.0.0.1:4700/_trainer/api/health","headers":{}}'
+  -d '{"method":"GET","url":"http://127.0.0.1:4800/_trainer/api/health","headers":{}}'
 # -> terminal A must show a `log` event for the health request
-curl -s -X POST http://127.0.0.1:4700/_trainer/api/proxy -H 'content-type: application/json' \
+curl -s -X POST http://127.0.0.1:4800/_trainer/api/proxy -H 'content-type: application/json' \
   -d '{"method":"GET","url":"https://api.github.com/user","headers":{}}'   # -> 400, blocked
 ```
 
@@ -175,15 +175,15 @@ Read spec §5, §7.
 
 **Verify (run these, paste output):**
 ```bash
-curl -si http://127.0.0.1:4700/github/user -H 'Authorization: Bearer BAD' | head -20
-curl -si http://127.0.0.1:4700/github/user -H "Authorization: token $VALID" | head -20
-curl -si http://127.0.0.1:4700/github/user -H "Authorization: Bearer $VALID" | head -5
-curl -si -X POST http://127.0.0.1:4700/github/user -H "Authorization: token $VALID" | head -5   # 405 + Allow
-curl -si "http://127.0.0.1:4700/github/user/repos?per_page=2&page=2" -H "Authorization: token $VALID" | head -20
-curl -si http://127.0.0.1:4700/github/rate_limit -H "Authorization: token $VALID"
+curl -si http://127.0.0.1:4800/github/user -H 'Authorization: Bearer BAD' | head -20
+curl -si http://127.0.0.1:4800/github/user -H "Authorization: token $VALID" | head -20
+curl -si http://127.0.0.1:4800/github/user -H "Authorization: Bearer $VALID" | head -5
+curl -si -X POST http://127.0.0.1:4800/github/user -H "Authorization: token $VALID" | head -5   # 405 + Allow
+curl -si "http://127.0.0.1:4800/github/user/repos?per_page=2&page=2" -H "Authorization: token $VALID" | head -20
+curl -si http://127.0.0.1:4800/github/rate_limit -H "Authorization: token $VALID"
 ```
 **Manual gate (human, after this task):** real Postman desktop, new environment with
-`baseUrl = http://localhost:4700/github`, `GET {{baseUrl}}/user` with Bearer auth returns 200.
+`baseUrl = http://localhost:4800/github`, `GET {{baseUrl}}/user` with Bearer auth returns 200.
 
 ---
 
@@ -212,10 +212,10 @@ The heart. Read spec §7, §8, §9, §12.
 
 **Verify (run these, paste output):**
 ```bash
-curl -s -X POST http://127.0.0.1:4700/_trainer/api/scenarios/t2-revoked-pat/activate | jq .
+curl -s -X POST http://127.0.0.1:4800/_trainer/api/scenarios/t2-revoked-pat/activate | jq .
 # take the revoked PAT from the ticket, call /github/user with it -> scenario:attempt on SSE
 # call with the valid PAT -> scenario:step then scenario:explaining
-curl -s -X POST http://127.0.0.1:4700/_trainer/api/explain -H 'content-type: application/json' \
+curl -s -X POST http://127.0.0.1:4800/_trainer/api/explain -H 'content-type: application/json' \
   -d '{"rootCause":"...","customerReply":"..."}'   # -> solutionMd, scenario:solved
 # ACTIVATE THE SAME SCENARIO TWICE and diff the two run contexts: every credential,
 # name, and ticket detail must differ, and run 1's valid PAT must NOT solve run 2.
@@ -363,7 +363,7 @@ cannot be verified, mark it `// UNVERIFIED SHAPE`.
 # hand-compute a Slack signature and prove the endpoint accepts it:
 ts=$(date +%s); body='{"type":"url_verification","challenge":"abc"}'
 sig="v0=$(printf "v0:$ts:$body" | openssl dgst -sha256 -hmac "$SIGNING_SECRET" -r | cut -d' ' -f1)"
-curl -si -X POST http://127.0.0.1:4700/slack/webhook/events \
+curl -si -X POST http://127.0.0.1:4800/slack/webhook/events \
   -H "X-Slack-Request-Timestamp: $ts" -H "X-Slack-Signature: $sig" \
   -H 'content-type: application/json' -d "$body"
 # and prove the cursor pagination loop terminates rather than looping forever
