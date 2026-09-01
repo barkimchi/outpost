@@ -5,6 +5,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createApp, type CreateAppOptions } from './app.js';
+import { bus } from './bus.js';
+import type { RequestEvent } from '@gym/shared';
 
 /**
  * App-level scaffold tests. Boots createApp() on an OS-assigned ephemeral port (never a
@@ -127,6 +129,46 @@ test('outside production, the static/SPA fallback is not mounted at all', async 
     assert.equal(res.status, 404);
     const body = (await res.json()) as { error: string };
     assert.equal(body.error, 'Not Found');
+  } finally {
+    server.close();
+  }
+});
+
+test('a malformed JSON body, through the real app wiring, still gets a correct 400 AND emits exactly one RequestEvent', async () => {
+  const webDistDir = await emptyTempDir();
+  const { server, port } = await listen(webDistDir);
+  try {
+    const seen: RequestEvent[] = [];
+    const onRequest = (ev: RequestEvent): void => {
+      seen.push(ev);
+    };
+    bus.on('request', onRequest);
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/_trainer/api/proxy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{not valid json',
+      });
+      assert.equal(res.status, 400);
+      const body = (await res.json()) as { error: string };
+      assert.equal(body.error, 'Bad Request');
+
+      // Give the bus a moment; the event is emitted synchronously inside the error
+      // handler, but this keeps the assertion robust either way.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      assert.equal(
+        seen.length,
+        1,
+        'rawBody mounts above requestLog, so this used to reach the error handler with total engine silence',
+      );
+      assert.equal(seen[0]?.status, 400);
+      assert.equal(seen[0]?.path, '/_trainer/api/proxy');
+      assert.equal(seen[0]?.pathLower, '/_trainer/api/proxy');
+      assert.equal(seen[0]?.method, 'POST');
+    } finally {
+      bus.off('request', onRequest);
+    }
   } finally {
     server.close();
   }

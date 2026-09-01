@@ -9,6 +9,7 @@ function makeEvent(id: string): RequestEvent {
     ts: Date.now(),
     method: 'GET',
     path: '/github/user',
+    pathLower: '/github/user',
     query: {},
     platform: 'github',
     reqHeaders: {},

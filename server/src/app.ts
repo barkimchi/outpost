@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import { WEB_DIST_DIR } from './config.js';
 import { rawBodyMiddlewares } from './middleware/rawBody.js';
-import { requestLog } from './middleware/requestLog.js';
+import { requestLog, emitBodyParserFailureEvent } from './middleware/requestLog.js';
 import { faultInjector } from './middleware/faultInjector.js';
 import { createTrainerRouter } from './trainer/router.js';
 import { createGithubRouter } from './platforms/github/router.js';
@@ -108,16 +108,23 @@ export function createApp(options: CreateAppOptions = {}): Express {
     res.status(404).json({ error: 'Not Found', path: req.path });
   });
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     // Malformed JSON (and other body-parser failures) must yield a 400 JSON error, not
     // an HTML stack trace: body-parser marks these with status/statusCode 400 or
     // type 'entity.parse.failed'. Everything else is a genuine 500.
-    const status = isBodyParserError(err) ? 400 : 500;
+    const isParserFailure = isBodyParserError(err);
+    const status = isParserFailure ? 400 : 500;
     const message = err instanceof Error ? err.message : 'Internal Server Error';
-    res.status(status).json({
-      error: status === 400 ? 'Bad Request' : 'Internal Server Error',
-      message,
-    });
+    const errorBody = { error: isParserFailure ? 'Bad Request' : 'Internal Server Error', message };
+    res.status(status).json(errorBody);
+
+    if (isParserFailure) {
+      // rawBody (step 1) mounts above requestLog (step 2), so a body-parser failure
+      // jumps straight here without requestLog ever running: without this call, a
+      // learner sending malformed JSON got a correct 400 and total engine silence
+      // (spec section 6; hard constraint 9). t4-malformed-body is exactly this lesson.
+      emitBodyParserFailureEvent(req, res, JSON.stringify(errorBody));
+    }
   });
 
   return app;

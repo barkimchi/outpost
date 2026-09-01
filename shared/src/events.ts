@@ -22,7 +22,18 @@ export interface RequestEvent {
   id: string;
   ts: number;
   method: string;
+  /** Verbatim, for display in the Logs tab: evidence a learner reads, showing exactly
+   *  what was sent (spec section 6). Never matched on; see pathLower. */
   path: string;
+  /**
+   * Lowercased, with any trailing slash stripped (except root `/`). THE ENGINE MATCHES
+   * ON THIS, NEVER ON `path` (spec section 6). Express routes case-insensitively, so
+   * `GET /GitHub/user` gets a real 200 from a platform mock; matching on the verbatim
+   * `path` would make that request invisible to the engine, the worst failure mode this
+   * project has (a scenario silently un-completable). Platform derivation and the
+   * requestLog skip list use this too, for the same reason.
+   */
+  pathLower: string;
   query: Record<string, string>;
   /** null when the path does not start with a known platform prefix (e.g. /_trainer). */
   platform: Platform | null;

@@ -6,12 +6,15 @@ import type { Platform, RequestEvent } from '@gym/shared';
 const BODY_CAP_BYTES = 8 * 1024; // 8KB, spec section 6
 
 /**
- * These two exact paths are never logged (spec section 6): logging the SSE route would
- * create a feedback loop (the `log` event the stream itself would then have to deliver),
- * and the outer POST to the proxy endpoint is control-plane noise -- the inner proxied
+ * These two paths are never logged (spec section 6): logging the SSE route would create
+ * a feedback loop (the `log` event the stream itself would then have to deliver), and
+ * the outer POST to the proxy endpoint is control-plane noise -- the inner proxied
  * request, which re-enters the server as a genuine HTTP request, is logged on its own
- * way through and is the one that actually matters. Matched by exact path, not content
- * type, per spec.
+ * way through and is the one that actually matters. Matched against `pathLower`
+ * (lowercased, trailing slash stripped), not the verbatim path and not content type:
+ * `/_TRAINER/events` and `/_trainer/events/` both route to the same handler Express does
+ * (routing is case-insensitive), so a case-sensitive, exact-match skip set only holds by
+ * accident.
  */
 const SKIP_PATHS = new Set<string>(['/_trainer/events', '/_trainer/api/proxy']);
 
@@ -20,10 +23,24 @@ const PROXY_MARKER_HEADER = 'x-postman-gym-proxy';
 
 const PLATFORM_PREFIXES = new Set<Platform>(['github', 'google', 'glean', 'slack']);
 
-function derivePlatform(reqPath: string): Platform | null {
-  const [, first] = reqPath.split('/');
-  const candidate = (first ?? '').toLowerCase();
-  return PLATFORM_PREFIXES.has(candidate as Platform) ? (candidate as Platform) : null;
+/**
+ * Lowercased, trailing slash stripped (root `/` kept as-is). The engine matches on this,
+ * never on the verbatim path (spec section 6): Express routes case-insensitively, so a
+ * request whose casing or trailing slash differs from a scenario's matcher would
+ * otherwise be invisible to the engine while still getting a real response from the
+ * platform mock.
+ */
+function toPathLower(rawPath: string): string {
+  const lower = rawPath.toLowerCase();
+  const stripped = lower.replace(/\/+$/, '');
+  return stripped === '' ? '/' : stripped;
+}
+
+/** `pathLower` is already lowercased; derive the platform from its first segment directly. */
+function derivePlatform(pathLower: string): Platform | null {
+  const [, first] = pathLower.split('/');
+  const candidate = (first ?? '') as Platform;
+  return PLATFORM_PREFIXES.has(candidate) ? candidate : null;
 }
 
 function normalizeHeaders(
@@ -60,6 +77,21 @@ function capBuffer(buf: Buffer): { text: string; truncated: boolean } {
 }
 
 /**
+ * Both requestLog's normal `finish()` and `emitBodyParserFailureEvent` (called from
+ * app.ts's error handler for step-1 body-parser failures) can end up racing to emit for
+ * the SAME response: `isBodyParserError` in app.ts matches on status/type, which a
+ * downstream handler could also produce for an unrelated reason after requestLog has
+ * already installed its res.write/res.end patch. Whichever path runs first sets this and
+ * the other becomes a no-op, so a single request/response cycle can never produce two
+ * RequestEvents (spec section 6: guard against double-counting a learner's attempt).
+ */
+function alreadyEmitted(res: Response): boolean {
+  if (res.locals.pgRequestEventEmitted) return true;
+  res.locals.pgRequestEventEmitted = true;
+  return false;
+}
+
+/**
  * Step 2 of the middleware spine (spec section 6). Wraps res.write/res.end to capture
  * the response body for the eventual RequestEvent, without altering what is actually
  * sent to the client: every captured chunk is passed through to the original
@@ -73,27 +105,30 @@ function capBuffer(buf: Buffer): { text: string; truncated: boolean } {
  * RequestEvent").
  */
 export function requestLog(req: Request, res: Response, next: NextFunction): void {
-  if (SKIP_PATHS.has(req.path)) {
+  // Capture method/path/query and derive pathLower NOW, before next(): once the request
+  // enters a mounted router (step 4, /_trainer), Express rewrites req.url (and therefore
+  // req.path) relative to that router's mount prefix for the duration of the handler. A
+  // terminal handler that responds directly, without ever calling next(), leaves that
+  // rewrite in place, since Express only restores the original req.url when advancing
+  // past the layer. Reading req.path lazily inside finish() below would then observe the
+  // stripped path (e.g. '/api/health' instead of '/_trainer/api/health'), which also
+  // breaks platform derivation and the skip check. Capturing here, before any router has
+  // touched the request, sidesteps that entirely.
+  const capturedMethod = req.method;
+  const capturedPath = req.path;
+  const capturedPathLower = toPathLower(capturedPath);
+
+  if (SKIP_PATHS.has(capturedPathLower)) {
     next();
     return;
   }
 
-  // Capture method/path/query NOW, before next(): once the request enters a mounted
-  // router (step 4, /_trainer), Express rewrites req.url (and therefore req.path)
-  // relative to that router's mount prefix for the duration of the handler. A terminal
-  // handler that responds directly, without ever calling next(), leaves that rewrite in
-  // place, since Express only restores the original req.url when advancing past the
-  // layer. Reading req.path lazily inside finish() below would then observe the
-  // stripped path (e.g. '/api/health' instead of '/_trainer/api/health'), which also
-  // breaks platform derivation. Capturing here, before any router has touched the
-  // request, sidesteps that entirely.
-  const capturedMethod = req.method;
-  const capturedPath = req.path;
   const capturedQuery = normalizeQuery(req.query);
 
   const start = process.hrtime.bigint();
   const chunks: Buffer[] = [];
   let capturedBytes = 0;
+  let bodyDropped = false;
 
   function isEventStream(): boolean {
     const contentType = res.getHeader('content-type');
@@ -102,7 +137,16 @@ export function requestLog(req: Request, res: Response, next: NextFunction): voi
 
   function capture(chunk: unknown, encoding: unknown): void {
     if (chunk === undefined || chunk === null) return;
-    if (isEventStream() || capturedBytes >= BODY_CAP_BYTES) return;
+    if (isEventStream()) return;
+    if (capturedBytes >= BODY_CAP_BYTES) {
+      // The cap was already hit by an earlier chunk: this chunk (and its bytes) are
+      // real, genuinely dropped data, not merely "at the cap". capBuffer() below only
+      // sees what made it into `chunks`, so a body whose captured bytes land on exactly
+      // BODY_CAP_BYTES would otherwise report truncated: false even though more data
+      // existed and was silently discarded right here.
+      bodyDropped = true;
+      return;
+    }
     const enc: BufferEncoding = typeof encoding === 'string' ? (encoding as BufferEncoding) : 'utf8';
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string, enc);
     chunks.push(buf);
@@ -140,11 +184,14 @@ export function requestLog(req: Request, res: Response, next: NextFunction): voi
   };
 
   function finish(): void {
+    if (alreadyEmitted(res)) return;
+
     const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
     const sseSkipped = isEventStream();
-    const { text: resBodyText, truncated: resBodyTruncated } = sseSkipped
+    const { text: resBodyText, truncated: resBodySizeTruncated } = sseSkipped
       ? { text: '', truncated: false }
       : capBuffer(Buffer.concat(chunks));
+    const resBodyTruncated = !sseSkipped && (resBodySizeTruncated || bodyDropped);
     const hasResBody = !sseSkipped && chunks.length > 0;
 
     let reqBody: string | null = null;
@@ -160,8 +207,9 @@ export function requestLog(req: Request, res: Response, next: NextFunction): voi
       ts: Date.now(),
       method: capturedMethod,
       path: capturedPath,
+      pathLower: capturedPathLower,
       query: capturedQuery,
-      platform: derivePlatform(capturedPath),
+      platform: derivePlatform(capturedPathLower),
       reqHeaders: normalizeHeaders(
         req.headers as Record<string, string | string[] | undefined>,
         new Set([PROXY_MARKER_HEADER]),
@@ -180,4 +228,68 @@ export function requestLog(req: Request, res: Response, next: NextFunction): voi
   }
 
   next();
+}
+
+/**
+ * Called from app.ts's error handler for body-parser failures (malformed JSON, a 413
+ * over the 2mb cap, and similar). `rawBody` (step 1) mounts above `requestLog` (step 2),
+ * so these errors jump straight to the error handler without requestLog ever running:
+ * without this, a learner sending malformed JSON got a correct 400 and total engine
+ * silence, violating hard constraint 9 (spec section 6). `t4-malformed-body` is exactly
+ * this lesson, so this path has to be observable too.
+ *
+ * Because the failure happens during body parsing, before the request has ever been
+ * dispatched into a mounted router, req.method/req.path are still in their pristine,
+ * un-rewritten state here (see the comment on the same capture in requestLog() above),
+ * so reading them directly is safe. res.write/res.end were never patched for this
+ * response (requestLog never ran), so resBody is built directly from the JSON error body
+ * the caller is about to send, rather than intercepted.
+ *
+ * durationMs is not meaningfully trackable here: the timer that measures it lives inside
+ * requestLog's closure, which never runs for this path. 0 is an honest "not measured"
+ * rather than a fabricated number.
+ *
+ * Guarded by the same alreadyEmitted() check as requestLog's finish(), so a status-400
+ * error from somewhere other than an actual body-parser failure (which would mean
+ * requestLog DID already run and will emit its own event when the response completes)
+ * cannot double-emit for the same request.
+ */
+export function emitBodyParserFailureEvent(req: Request, res: Response, resBodyJson: string): void {
+  if (alreadyEmitted(res)) return;
+
+  const pathLower = toPathLower(req.path);
+
+  let reqBody: string | null = null;
+  let reqBodyTruncated = false;
+  if (req.rawBody && req.rawBody.byteLength > 0) {
+    const capped = capBuffer(req.rawBody);
+    reqBody = capped.text;
+    reqBodyTruncated = capped.truncated;
+  }
+
+  const { text: resBodyText, truncated: resBodyTruncated } = capBuffer(Buffer.from(resBodyJson, 'utf8'));
+
+  const ev: RequestEvent = {
+    id: randomUUID(),
+    ts: Date.now(),
+    method: req.method,
+    path: req.path,
+    pathLower,
+    query: normalizeQuery(req.query),
+    platform: derivePlatform(pathLower),
+    reqHeaders: normalizeHeaders(
+      req.headers as Record<string, string | string[] | undefined>,
+      new Set([PROXY_MARKER_HEADER]),
+    ),
+    reqBody,
+    reqBodyTruncated,
+    status: res.statusCode,
+    resHeaders: normalizeHeaders(res.getHeaders()),
+    resBody: resBodyText,
+    resBodyTruncated,
+    durationMs: 0,
+    source: req.headers[PROXY_MARKER_HEADER] ? 'proxy' : 'external',
+  };
+
+  bus.emit('request', ev);
 }
