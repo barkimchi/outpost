@@ -15,15 +15,15 @@ Train first, showcase second.
 
 ## 2. Hard constraints (never violate)
 
-1. **Single process, single port.** Default `4800` (override with `PORT`). Prod mode
+1. **Single process, single port.** Default `4600` (override with `PORT`). Prod mode
    serves `web/dist` from the same port. `npm start` is the only command a user needs.
-   *(Neither 4600 nor 4700 is usable on this machine. 4600 is held by a stray orphaned
-   `python -m http.server`. 4700 is held by Bar's LIVE Atrics client-site preview
-   (`python -m http.server 4700 --bind 127.0.0.1`, tmux session `atrics-web`, running
-   since Aug 5) which must NOT be killed. Because that one binds `127.0.0.1`
-   specifically, a gym server on `0.0.0.0:4700` binds successfully yet is unreachable at
-   the documented `127.0.0.1` fallback: a silent failure, which is why the default moved
-   rather than being worked around.)*
+   *(4600 was briefly blocked by an orphaned `python -m http.server` running since
+   Jul 21; Bar approved killing it on 2026-08-31 and the port is clear. **Do not fall
+   back to 4700**: that is Bar's live Atrics client-site preview
+   (`python -m http.server 4700 --bind 127.0.0.1`, tmux session `atrics-web`) and must
+   not be disturbed. It binds `127.0.0.1` specifically, so a server on `0.0.0.0:4700`
+   binds successfully and still loses all localhost traffic to it, which fails silently.
+   If 4600 is ever occupied, use `PORT` and pick 4800, not 4700.)*
 2. **Listen on `0.0.0.0`.** Document `127.0.0.1` as the fallback base URL for
    IPv6-first resolution. Postman **desktop** only — the web client cannot reach localhost.
 3. **No real credentials, ever.** No network egress to real GitHub/Google/Glean/Slack.
@@ -56,7 +56,7 @@ Train first, showcase second.
 - Web: React 18, Vite 5, TypeScript, Zustand, Tailwind 3, CodeMirror 6.
 - Persistence: `data/progress.json`, `data/workspace.json` (both gitignored, written
   atomically via write-temp-then-rename, debounced 250ms).
-- Dev: Vite on 5173 proxying `/_trainer`, `/github`, `/google`, `/glean`, `/slack` to 4800.
+- Dev: Vite on 5173 proxying `/_trainer`, `/github`, `/google`, `/glean`, `/slack` to 4600.
 
 ## 4. File tree
 
@@ -351,7 +351,7 @@ The riskiest module. Requirements:
 - **Registered redirect URIs** (exactly these two):
   - `https://oauth.pstmn.io/v1/callback` (real Postman intercepts the navigation; the URL
     is never actually fetched. **"Authorize using browser" must be UNCHECKED.**)
-  - `http://localhost:4800/_trainer/oauth/callback` (built-in UI popup → `postMessage`)
+  - `http://localhost:4600/_trainer/oauth/callback` (built-in UI popup → `postMessage`)
 - Anything else → `400` HTML page reading **Error 400: redirect_uri_mismatch**.
 - `POST /google/oauth2/token` supports `grant_type=authorization_code` and
   `grant_type=refresh_token`. Codes are single-use, 60s TTL. Errors:
