@@ -151,6 +151,28 @@ export function redirectUriMismatchPage(requestedUri: string | undefined): strin
 </html>`;
 }
 
+// --- invalid_client HTML page (Task 6 fix round, finding 5: client binding) ------------
+
+// UNVERIFIED SHAPE: approximated, mirroring redirectUriMismatchPage()'s own
+// "Error <code>: <reason>" pattern. docs/SPEC.md section 11 gives "Error 400:
+// redirect_uri_mismatch" verbatim but does not separately name an authorize-time
+// invalid_client page (only the token endpoint's JSON invalid_client error, already
+// sourced above); this HTML page's exact copy is this mock's own reasonable extension of
+// that sibling error's format, not independently verified against a real Google page.
+export function invalidClientPage(clientId: string | undefined): string {
+  const shown = clientId === undefined ? '(missing)' : escapeHtml(clientId);
+  return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Error 401: invalid_client</title></head>
+<body>
+<h1>Error 401: invalid_client</h1>
+<p>The OAuth client in this request is not recognized.</p>
+<p>You can let the app developer know that this client_id is not registered.</p>
+<p>Request details: client_id=${shown}</p>
+</body>
+</html>`;
+}
+
 // --- Success bodies (not asserted byte-exact by any scenario, same convention as
 // github/router.ts's own success bodies) -------------------------------------------
 

@@ -428,8 +428,33 @@ test('every registered scenario 1-11 builds without throwing, for every scenario
       assert.equal(payload.scenarioId, def.id);
       assert.ok(payload.ticketMd.length > 0);
       assert.ok((payload.steps ?? []).length > 0);
+      assert.ok(payload.docsRef.length > 0, `${def.id}: docsRef must be a real, non-empty reference`);
     }
     assert.equal(scenarioRegistry.length, 11, 'scenarios 1-11 are registered (tiers 1-3)');
+  } finally {
+    engine.dispose();
+  }
+});
+
+// --- Task 6 fix round, finding 2: docsRef was authored on every scenario but had zero
+// consumers anywhere in the codebase (not the activate payload, any trainer event,
+// shared/src/api.ts, or web/src). Exposed via ActivatedPayload/EnginePublicState so it is
+// a real, inspectable part of the API contract, not fiction described only in a comment. --
+
+test('docsRef passes through from ScenarioDef to both the activate payload and getState(), and stays exposed in drill mode', () => {
+  const engine = freshEngine();
+  try {
+    const def = scenarioRegistry.find((d) => d.id === 't3-redirect-mismatch');
+    assert.ok(def, 'sanity: t3-redirect-mismatch must be registered');
+    const activated = engine.activate('t3-redirect-mismatch');
+    assert.deepEqual(activated.docsRef, def?.docsRef, 'activate() must echo the SAME docsRef the ScenarioDef declares, not a copy that could drift');
+    assert.deepEqual(engine.getState().docsRef, def?.docsRef);
+
+    // Drill mode hides scenario IDENTITY (id/title/fault shape); docsRef names doc TOPICS,
+    // not identity, so unlike scenarioId/title it stays exposed here too.
+    const drill = engine.activateDrill(1);
+    assert.equal(drill.scenarioId, undefined, 'sanity: drill mode really does hide identity');
+    assert.ok(Array.isArray(drill.docsRef) && drill.docsRef.length > 0, 'docsRef is NOT hidden by drill mode');
   } finally {
     engine.dispose();
   }

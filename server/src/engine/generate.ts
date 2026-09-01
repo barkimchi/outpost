@@ -177,16 +177,31 @@ const SCOPE_EXTRAS = ['workflow', 'gist', 'user:email'];
 
 // Task 6: keys only, resolved to real strings (which need the live PORT) by
 // `platforms/google/oauth.ts`. See the `wrongRedirectVariant` comment below.
+//
+// Fix round: the original sixth variant was `localhost-127`
+// (`http://127.0.0.1:<PORT>/_trainer/oauth/callback`). Dropped: docs/SPEC.md hard
+// constraint 2 documents 127.0.0.1 as the legitimate fallback base URL for reaching this
+// server, so using it as a WRONG decoy in this one exercise contradicted the rest of the
+// project's own advice about the same literal host string. `localhost-wrong-port` is a
+// real, unrelated-to-anything-else near-miss instead (an adjacent port number, the kind of
+// copy-paste slip that happens when a port changes and one reference lags behind).
 const WRONG_REDIRECT_VARIANTS = [
   'pstmn-trailing-slash',
   'pstmn-http',
   'pstmn-no-v1',
-  'localhost-127',
+  'localhost-wrong-port',
   'localhost-trailing-slash',
   'localhost-no-trainer-prefix',
 ] as const;
 
 const INSUFFICIENT_SCOPE_VARIANTS = ['missing', 'decoy'] as const;
+
+// Task 6 fix round: t3-token-expiry's access-token TTL used to be a single hardcoded
+// literal (15), identical across every activation and stated verbatim in the ticket text,
+// which together handed the learner both the diagnosis and the fix with nothing left to
+// find out. Drawn per run instead, from a pool of short-but-different values; the ticket
+// no longer states the number at all (see scenarios/t3-google.ts).
+const SHORT_ACCESS_TOKEN_TTL_POOL_SEC = [8, 10, 12, 15, 18, 20, 25] as const;
 
 const GOOGLE_SCOPES = [
   'openid',
@@ -290,6 +305,11 @@ export function generate(seed: string): RunContext {
   // place, plausible enough to read as "probably fine" without a careful diff.
   const insufficientScopeVariant = rng.pick(INSUFFICIENT_SCOPE_VARIANTS);
 
+  // Task 6 fix round (spec review finding 6): which short TTL t3-token-expiry's `setup`
+  // overrides World.google.accessTokenTtlSec to, so "15 seconds" is never a fixed,
+  // memorizable constant across every activation.
+  const shortAccessTokenTtlSec = rng.pick(SHORT_ACCESS_TOKEN_TTL_POOL_SEC);
+
   const channelNames = rng.pickN(CHANNEL_NAME_POOL, rng.int(3, 5));
   const channels = channelNames.map((name) => ({
     id: `C${rng.token(9, UPPER_ALNUM)}`,
@@ -352,6 +372,7 @@ export function generate(seed: string): RunContext {
       missingScopeVariant,
       wrongRedirectVariant,
       insufficientScopeVariant,
+      shortAccessTokenTtlSec: String(shortAccessTokenTtlSec),
     },
   };
 }

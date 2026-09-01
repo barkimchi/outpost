@@ -57,13 +57,17 @@ function extractLabeled(ticketMd: string, label: string): string {
 }
 
 function extractWrongRedirectUri(ticketMd: string): string {
-  const match = ticketMd.match(/currently configured as: (\S+)/);
+  // Fix round: the ticket now wraps the value in backticks, same as every other value in
+  // this ticket (Minors finding: a bare-text decoy next to backtick-wrapped correct values
+  // was itself a formatting tell on exactly the value that most needed character-level
+  // reading).
+  const match = ticketMd.match(/Callback URL configured in the OAuth helper: `([^`]+)`/);
   if (!match?.[1]) throw new Error(`could not find the configured (wrong) redirect_uri in ticket:\n${ticketMd}`);
   return match[1];
 }
 
 function extractConfiguredScopeString(ticketMd: string): string {
-  const match = ticketMd.match(/request this scope string: (.+)/);
+  const match = ticketMd.match(/Scope string the OAuth helper is currently configured to request: `([^`]+)`/);
   if (!match?.[1]) throw new Error(`could not find the configured scope string in ticket:\n${ticketMd}`);
   return match[1].trim();
 }
@@ -72,14 +76,14 @@ const [REGISTERED_URI_A, REGISTERED_URI_B] = registeredRedirectUris();
 
 async function approveConsent(
   port: number,
-  opts: { redirectUri: string; scope: string; clientId: string; state?: string },
+  opts: { redirectUri: string; scope: string; clientId: string; state?: string; approve?: '1' | '0' },
 ): Promise<Response> {
   const body = new URLSearchParams({
     client_id: opts.clientId,
     redirect_uri: opts.redirectUri,
     response_type: 'code',
     scope: opts.scope,
-    approve: '1',
+    approve: opts.approve ?? '1',
     ...(opts.state !== undefined ? { state: opts.state } : {}),
   });
   return fetch(`http://127.0.0.1:${port}/google/o/oauth2/v2/auth`, {
@@ -273,6 +277,99 @@ test('t3-redirect-mismatch solved end to end: wrong URI attempt recorded, then c
   }
 });
 
+// --- Fix round, finding 1: the wrong-URI failure mode is a GET (the consent page never
+// renders, so there is no form to POST). Before the fix, `method: 'POST'` alone meant
+// three wrong GETs produced attempts: 0, hintsUnlocked: 0, and POST /_trainer/api/hint
+// returned 409: hard constraint 9 violated on this scenario's PRIMARY failure path. -------
+
+test('a wrong GET to the authorize endpoint (not just a wrong POST) registers as a scenario:attempt and unlocks hints at 3, 6, 9', async () => {
+  const engine = freshEngine();
+  const { events, stop } = collectTrainerEvents();
+  const app = buildRealPipelineApp();
+  const { server, port } = await listen(app);
+  try {
+    const activated = engine.activate('t3-redirect-mismatch');
+    const clientId = extractLabeled(activated.ticketMd, 'Client ID');
+    const wrongUri = extractWrongRedirectUri(activated.ticketMd);
+
+    async function wrongGet(): Promise<Response> {
+      const url = new URL(`http://127.0.0.1:${port}/google/o/oauth2/v2/auth`);
+      url.searchParams.set('client_id', clientId);
+      url.searchParams.set('redirect_uri', wrongUri);
+      url.searchParams.set('response_type', 'code');
+      url.searchParams.set('scope', 'openid email profile');
+      return fetch(url);
+    }
+
+    for (let i = 0; i < 9; i++) {
+      const res = await wrongGet();
+      assert.equal(res.status, 400, `wrong GET attempt ${i + 1} must still be a real 400 from the mock itself`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const attemptEvents = events.filter((e): e is Extract<TrainerEvent, { type: 'scenario:attempt' }> => e.type === 'scenario:attempt');
+    assert.equal(attemptEvents.length, 9, 'every one of the 9 wrong GETs must count as an attempt, not be silently ignored');
+    assert.ok(
+      attemptEvents.every((e) => e.reason.length > 0 && e.reason.includes('GET')),
+      'each attempt reason must be non-empty and name the method that failed (hard constraint 9)',
+    );
+    assert.ok(attemptEvents[0]?.attemptHint, 'attemptHint must be present so the learner is not just told "wrong" with no guidance');
+
+    const hintEvents = events.filter((e) => e.type === 'hint:unlocked');
+    assert.deepEqual(
+      hintEvents.map((e) => (e as { index: number }).index),
+      [0, 1, 2],
+      'hints must unlock at attempts 3, 6, and 9 (docs/SPEC.md section 9)',
+    );
+    assert.equal(engine.getState().hintsUnlocked, 3);
+
+    // Confirm this is really reachable through the trainer API too, not just the engine's
+    // internal counters: POST /_trainer/api/hint must now succeed instead of 409ing.
+    const world = engine.getState();
+    assert.equal(world.attempts, 9);
+  } finally {
+    stop();
+    server.close();
+    engine.dispose();
+  }
+});
+
+test('a correct GET (before ever POSTing) completes step 1; a POST that merely denies consent does not', async () => {
+  const engine = freshEngine();
+  const app = buildRealPipelineApp();
+  const { server, port } = await listen(app);
+  try {
+    const activated = engine.activate('t3-redirect-mismatch');
+    const clientId = extractLabeled(activated.ticketMd, 'Client ID');
+
+    // A deliberate denial is also a 302 (to ?error=access_denied), but carries no code:
+    // must NOT be mistaken for progress.
+    const denied = await approveConsent(port, {
+      redirectUri: REGISTERED_URI_A as string,
+      scope: 'openid email profile',
+      clientId,
+      approve: '0',
+    });
+    assert.equal(denied.status, 302, 'sanity: a denial is still a real 302, just without a code');
+    assert.equal(engine.getState().currentStepIndex, 0, 'a denial must not advance past step 1');
+
+    // A plain, correct GET (the realistic first move, before any POST at all) DOES count:
+    // it proves the callback URL is genuinely valid, even before a code exists.
+    const url = new URL(`http://127.0.0.1:${port}/google/o/oauth2/v2/auth`);
+    url.searchParams.set('client_id', clientId);
+    url.searchParams.set('redirect_uri', REGISTERED_URI_A as string);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('scope', 'openid email profile');
+    const res = await fetch(url);
+    assert.equal(res.status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(engine.getState().currentStepIndex, 1, 'a correct GET alone must complete step 1');
+  } finally {
+    server.close();
+    engine.dispose();
+  }
+});
+
 test('t3-token-expiry solved end to end: fresh token works immediately, refresh grant completes the flow', async () => {
   const engine = freshEngine();
   const { events, stop } = collectTrainerEvents();
@@ -283,7 +380,12 @@ test('t3-token-expiry solved end to end: fresh token works immediately, refresh 
     const clientId = extractLabeled(activated.ticketMd, 'Client ID');
     const clientSecret = extractLabeled(activated.ticketMd, 'Client secret');
 
-    assert.equal(activeWorld().google.accessTokenTtlSec, 15, 'setup() must have overridden the TTL for this scenario');
+    // Fix round: the TTL is now drawn per run (SHORT_ACCESS_TOKEN_TTL_POOL_SEC in
+    // generate.ts), not fixed at 15, so this only checks that setup() genuinely overrode
+    // World's baseline (3600), not a specific number.
+    const ttlSec = activeWorld().google.accessTokenTtlSec;
+    assert.notEqual(ttlSec, 3600, 'setup() must have overridden the TTL for this scenario');
+    assert.ok(ttlSec > 0 && ttlSec <= 30, `expected a short TTL, got ${ttlSec}`);
 
     const { accessToken, refreshToken } = await freshConsentAndExchange(port, {
       clientId,

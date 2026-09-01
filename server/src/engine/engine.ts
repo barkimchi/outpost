@@ -46,6 +46,17 @@ export interface ActivatedPayload {
   steps?: ActivatedStepSummary[];
   stepCount: number;
   drill: boolean;
+  /**
+   * `ScenarioDef.docsRef` (Task 6 fix round: this was authored on every one of the 11
+   * registered scenarios since Task 3 but had zero consumers anywhere, not the activate
+   * payload, any trainer event, shared/src/api.ts, or web/src, making it exactly the
+   * "generated but never read" pattern hard constraint 7a's own commit warns against.
+   * Exposed here, not in `web/src` (out of scope this round, Task 5 is live there):
+   * a real API consumer, inspectable over HTTP today, is the fix within this round's
+   * reach; a future task's Docs tab is free to read the same field once it exists. Not
+   * identity-revealing (it names doc TOPICS, e.g. "google-oauth", not a scenario id or
+   * fault), so it is exposed in drill mode too, same as `platform`/`tier`/`track`. */
+  docsRef: string[];
 }
 
 export interface StateStepSummary {
@@ -70,6 +81,9 @@ export interface EnginePublicState {
   hintsUnlocked?: number;
   hintsRevealed?: number;
   solutionRevealed?: boolean;
+  /** `ScenarioDef.docsRef`, same fix and same reasoning as `ActivatedPayload.docsRef`
+   *  above (Task 6 fix round). */
+  docsRef?: string[];
   /** The CURRENT step's `Step.attemptHint` (fix round 2), spec section 8: "shown when
    *  match hits but assertions fail." Present whenever a scenario is active and its
    *  current step defines one, regardless of whether any attempt has happened yet or
@@ -293,6 +307,7 @@ export class Engine {
       ticketMd: c.built.ticketMd,
       stepCount: c.built.steps.length,
       drill: c.drill,
+      docsRef: c.def.docsRef,
     };
     // Drill mode: "the activated payload omits title and any fault identity. Only
     // ticketMd and step count are exposed" (docs/SPEC.md section 9).
@@ -322,6 +337,7 @@ export class Engine {
       platform: c.def.platform,
       drill: c.drill,
       ticketMd: c.built.ticketMd,
+      docsRef: c.def.docsRef,
       steps,
       currentStepIndex: c.stepIndex,
       stepCount: c.built.steps.length,

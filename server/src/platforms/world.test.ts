@@ -78,13 +78,13 @@ test('resetState populates google, glean, and slack sections from RunContext', (
   const world = activeWorld();
 
   assert.equal(world.google.clientId, ctx.google.clientId);
-  assert.deepEqual(world.google.grantedScopes, ctx.google.grantedScopes);
-  // Task 6: the three live registries oauth.ts issues into during a run start empty on
-  // every reset, and the one-shot revoke fault starts disarmed.
+  assert.equal(world.google.clientSecret, ctx.google.clientSecret);
+  assert.equal(world.google.accessTokenTtlSec, ctx.google.accessTokenTtlSec);
+  // Task 6 fix round: the three live registries oauth.ts issues into during a run start
+  // empty on every reset.
   assert.deepEqual(world.google.issuedTokens, {});
   assert.deepEqual(world.google.authCodes, {});
   assert.deepEqual(world.google.refreshTokens, {});
-  assert.equal(world.google.revokeNextRefreshToken, false);
   assert.equal(world.glean.indexingToken, ctx.glean.indexingToken);
   assert.deepEqual(world.glean.docs, ctx.glean.docs);
   assert.equal(world.slack.signingSecret, ctx.slack.signingSecret);

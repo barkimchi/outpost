@@ -1,5 +1,4 @@
 import type { RunContext, ScenarioDef } from '@gym/shared';
-import { escapeRegex } from '../engine/match.js';
 import {
   BASELINE_GOOGLE_SCOPES,
   CALENDAR_EVENTS_DECOY_SCOPE,
@@ -33,18 +32,28 @@ import {
  * current (wrong) configuration (`engine/generate.ts`'s `wrongRedirectVariant`);
  * `t3-insufficient-scope` randomizes WHETHER the current scope string is missing the
  * calendar scope entirely or carries a real, distinct, plausible-looking decoy scope
- * instead (`insufficientScopeVariant`). `t3-token-expiry` and `t3-revoked-refresh` have no
- * analogous multi-candidate "pick the right one" shape to memorize a position from (their
- * fix is a fixed PROCEDURE, not a guess among labeled candidates), so per-run variance
- * there is limited to the generated values already required by hard constraint 6
- * (seed/company/client credentials/pre-existing token strings, all fresh every run); see
+ * instead (`insufficientScopeVariant`); `t3-token-expiry` randomizes WHICH short TTL its
+ * `setup` installs (`shortAccessTokenTtlSec`, fix round: was fixed at 15 across every
+ * activation). `t3-revoked-refresh` has no analogous multi-candidate "pick the right one"
+ * shape to memorize a position from: its two credentials are not interchangeable
+ * candidates the learner picks between (unlike, say, t2's two PATs), they are genuinely
+ * different halves of one grant with a fixed procedural fix, so per-run variance there is
+ * limited to the generated values already required by hard constraint 6 (seed/company/
+ * client credentials/pre-existing token strings, all fresh every run); see
  * `t3-google.test.ts` and the task-6 report for the live distribution evidence and the
  * same reasoning precedent set for `t2-private-404` in `task-3-report.md`.
+ *
+ * Fix round: ticket audit. Every ticket below states the SYMPTOM and whatever EVIDENCE the
+ * mock's own real error responses would show a learner who actually tried the flow, but
+ * never NAMES the underlying mechanism or PRESCRIBES the fix in so many words (spec review
+ * finding: `t3-token-expiry`'s ticket used to state the exact TTL and literally instruct
+ * "use the refresh token... do not start the whole consent flow over," leaving nothing to
+ * diagnose). `attemptHint` and `hints` are exempt from this: both are scaffolding shown
+ * only in response to (or in exchange for) a genuine attempt, not the puzzle's opening
+ * statement, and stay as revealing as they already were.
  */
 
 const [REGISTERED_URI_A, REGISTERED_URI_B] = registeredRedirectUris();
-const ESCAPED_URI_A = escapeRegex(REGISTERED_URI_A as string);
-const ESCAPED_URI_B = escapeRegex(REGISTERED_URI_B as string);
 
 function callbackUrlLines(): string {
   return `Callback URL: \`${trainerCallbackRedirectUri()}\` (built-in UI) or \`${POSTMAN_INTERCEPT_REDIRECT_URI}\` (real Postman desktop, with "Authorize using browser" unchecked)`;
@@ -60,27 +69,24 @@ const t3RedirectMismatch: ScenarioDef = {
   platform: 'google',
   docsRef: ['google-oauth'],
   build(ctx: RunContext) {
-    const wrongUri = resolveWrongRedirectUri(ctx.vars.wrongRedirectVariant ?? 'localhost-127');
+    const wrongUri = resolveWrongRedirectUri(ctx.vars.wrongRedirectVariant ?? 'localhost-no-trainer-prefix');
 
     const ticketMd = `
 ## Ticket
 
 ${ctx.company.name}'s OAuth helper for Google keeps failing at the very first step: the
-consent screen loads and approves fine, but the redirect back never lands anywhere
-useful.
+redirect never lands anywhere useful.
 
 Client ID: \`${ctx.google.clientId}\`
 Client secret: \`${ctx.google.clientSecret}\`
 Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
+Callback URL configured in the OAuth helper: \`${wrongUri}\`
 
-The OAuth helper's callback URL is currently configured as: ${wrongUri}
+For reference, this app has exactly two redirect URIs registered with Google:
+\`${REGISTERED_URI_A}\` and \`${REGISTERED_URI_B}\`.
 
-Two callback URLs are actually registered for this app: \`${REGISTERED_URI_A}\` (real
-Postman desktop, with "Authorize using browser" unchecked) and \`${REGISTERED_URI_B}\`
-(the built-in UI's popup).
-
-Fix the callback URL, complete the consent flow, exchange the code for a token, and
-confirm access by calling the userinfo endpoint.
+Get this working end to end: complete consent, exchange the resulting code for a token,
+and confirm access by calling the userinfo endpoint.
 `.trim();
 
     return {
@@ -90,14 +96,19 @@ confirm access by calling the userinfo endpoint.
       steps: [
         {
           id: 'step-1',
-          title: 'Get a valid authorization code',
-          match: { method: 'POST', pathPattern: '^/google/o/oauth2/v2/auth$' },
-          assertions: [
-            { kind: 'status', equals: 302 },
-            { kind: 'headerMatches', name: 'location', matches: `^(?:${ESCAPED_URI_A}|${ESCAPED_URI_B})\\?code=` },
-          ],
+          title: "Point the OAuth helper at a registered redirect_uri",
+          // Fix round, finding 1: the wrong-URI failure is a GET (the consent page never
+          // renders at all, 400, so there is nothing to POST). `method: 'POST'` alone left
+          // that entire failure path invisible to the engine: three wrong GETs produced
+          // zero attempts and never unlocked a hint. Widened to both methods; the
+          // 't3-redirect-progress' custom assertion (engine/assert.ts) handles the two
+          // different success shapes (GET renders 200 with no Location header at all,
+          // POST-approve redirects 302 WITH one) without false-failing a correct GET or
+          // false-passing a POST that merely denied consent.
+          match: { method: ['GET', 'POST'], pathPattern: '^/google/o/oauth2/v2/auth$' },
+          assertions: [{ kind: 'custom', id: 't3-redirect-progress' }],
           attemptHint:
-            'A redirect_uri_mismatch page means the callback URL sent to Google does not exactly match one of the two registered ones. Compare it character by character, including the scheme and any trailing slash.',
+            'A redirect_uri_mismatch page (on either the initial GET or the consent POST) means the callback URL sent to Google does not exactly match one of the two registered ones. Compare it character by character, including the scheme and any trailing slash.',
         },
         {
           id: 'step-2',
@@ -121,7 +132,7 @@ confirm access by calling the userinfo endpoint.
         },
       ],
       hints: [
-        'Google validates redirect_uri as an exact string match, not "close enough": a trailing slash, http vs https, or 127.0.0.1 vs localhost all count as a completely different URI.',
+        'Google validates redirect_uri as an exact string match, not "close enough": a trailing slash, http vs https, or a wrong port number all count as a completely different URI.',
         `Exactly two URIs are registered: ${REGISTERED_URI_A} and ${REGISTERED_URI_B}. Anything else, including the value currently configured, gets a 400 page.`,
         'Once the callback URL matches exactly, the code Google issues works normally: exchange it, then call userinfo with the resulting access token.',
       ],
@@ -131,8 +142,8 @@ confirm access by calling the userinfo endpoint.
 The OAuth helper's callback URL, \`${wrongUri}\`, is not one of the two URIs actually
 registered for this app. Google validates \`redirect_uri\` as an exact string match at
 both the consent step and the token exchange, so a near-miss (wrong scheme, a missing or
-extra trailing slash, a dropped path segment, or \`127.0.0.1\` where \`localhost\` is
-registered) fails the same way a completely unrelated URL would.
+extra trailing slash, a dropped path segment, or a wrong port number) fails the same way
+a completely unrelated URL would.
 
 ## Fix
 
@@ -154,6 +165,11 @@ const t3TokenExpiry: ScenarioDef = {
   platform: 'google',
   docsRef: ['google-oauth'],
   build(ctx: RunContext) {
+    // Fix round, finding 6: drawn per run instead of a fixed literal (was 15 across every
+    // activation, and the ticket used to name it outright). Neither the number nor the
+    // word "TTL"/"refresh" appears in ticketMd below; only the symptom does.
+    const ttlSec = Number(ctx.vars.shortAccessTokenTtlSec ?? '15');
+
     const ticketMd = `
 ## Ticket
 
@@ -164,11 +180,9 @@ Client secret: \`${ctx.google.clientSecret}\`
 Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
 ${callbackUrlLines()}
 
-Complete the consent flow and confirm access via userinfo. Heads up from ops: access
-tokens for this app are currently being issued with a 15 second lifetime while a
-rate-limit investigation is open, so whatever token you get back will die almost
-immediately. When it does, use the refresh token from the same exchange to get a new
-access token; do not start the whole consent flow over.
+Complete the consent flow and confirm access via userinfo. Access holds for a little
+while and then falls over on its own, with nothing else about the request or the
+credentials changing in between. Get it reconnecting reliably.
 `.trim();
 
     return {
@@ -177,7 +191,7 @@ access token; do not start the whole consent flow over.
       // only, without touching generate()'s baseline (3600 everywhere else). See
       // engine.ts's activateDef() comment on why `setup` had to be wired in for this to
       // work at all.
-      setup: [(w) => { w.google.accessTokenTtlSec = 15; }],
+      setup: [(w) => { w.google.accessTokenTtlSec = ttlSec; }],
       faults: [],
       steps: [
         {
@@ -188,7 +202,7 @@ access token; do not start the whole consent flow over.
             { kind: 'status', equals: 200 },
             { kind: 'jsonPath', path: 'email', equals: ctx.user.email },
           ],
-          attemptHint: 'Use the access token from the token exchange as "Authorization: Bearer <token>", right away: this step must succeed within the 15 second window.',
+          attemptHint: `Use the access token from the token exchange as "Authorization: Bearer <token>", right away: this step must succeed within the token's short (${ttlSec} second) lifetime.`,
         },
         {
           id: 'step-2',
@@ -202,17 +216,17 @@ access token; do not start the whole consent flow over.
         },
       ],
       hints: [
-        '15 seconds is genuinely short: complete the consent-to-userinfo path in one continuous pass, without stopping to read documentation in between.',
+        `Access tokens for this integration currently live for only ${ttlSec} seconds: complete the consent-to-userinfo path in one continuous pass, without stopping to read documentation in between.`,
         'The original token exchange already returned a refresh_token alongside the access_token. Save it.',
         'POST to the same token endpoint again, this time with grant_type=refresh_token and refresh_token set to the value you saved, to mint a new access token without a new consent screen.',
       ],
       solutionMd: `
 ## Root cause
 
-Access tokens for this integration carry an unusually short, 15 second lifetime right
-now. The first access token from the consent flow genuinely works, briefly, then expires
-like any other access token; nothing else about the request or the credentials was ever
-wrong.
+Access tokens for this integration carry an unusually short, ${ttlSec} second lifetime
+right now. The first access token from the consent flow genuinely works, briefly, then
+expires like any other access token; nothing else about the request or the credentials
+was ever wrong.
 
 ## Fix
 
@@ -266,7 +280,7 @@ afterward. Confirm what's actually broken, then get it fully reconnected.
           };
           // The rotation itself: this refresh token is already dead before the learner
           // ever touches it, mirroring "ops rotated it during the sweep."
-          w.google.refreshTokens[existingRefreshToken] = { scopes, revoked: true };
+          w.google.refreshTokens[existingRefreshToken] = { scopes, clientId: ctx.google.clientId, revoked: true };
         },
       ],
       faults: [],
@@ -344,11 +358,9 @@ Client ID: \`${ctx.google.clientId}\`
 Client secret: \`${ctx.google.clientSecret}\`
 ${callbackUrlLines()}
 Currently issued access token: \`${existingAccessToken}\`
+Scope string the OAuth helper is currently configured to request: \`${currentScopeStr}\`
 
-The OAuth helper is currently configured to request this scope string: ${currentScopeStr}
-
-Work out what's actually missing, fix the OAuth helper's scope configuration, re-run
-consent, and get the calendar list call succeeding.
+Work out what's missing and get the calendar list call succeeding.
 `.trim();
 
     return {

@@ -68,6 +68,16 @@ export function isRegisteredRedirectUri(uri: string | undefined): uri is string 
   return uri !== undefined && registeredRedirectUris().includes(uri);
 }
 
+/**
+ * Client binding (Task 6 fix round, finding 5): before this, ANY `client_id` value,
+ * including one nobody ever registered, rendered the consent page and got a real code
+ * issued. RFC 6749 section 4.1.3 and real Google both reject an unrecognized client at
+ * authorize, not just later at token exchange.
+ */
+export function isRegisteredClientId(clientId: string | undefined): clientId is string {
+  return clientId !== undefined && clientId === activeWorld().google.clientId;
+}
+
 // --- t3-redirect-mismatch decoys (docs/SPEC.md hard constraint 7a: "randomize ... which
 // redirect URI is wrong") ----------------------------------------------------------------
 
@@ -76,10 +86,13 @@ export function isRegisteredRedirectUri(uri: string | undefined): uri is string 
  * Lives here, not in generate.ts, because it needs the live `PORT` and generate.ts is
  * deliberately config-free and pure (a function of `seed` alone). Each variant is a
  * plausible copy-paste mistake against one of the two genuinely registered URIs: a
- * trailing slash, http instead of https, a dropped path segment, 127.0.0.1 instead of
- * localhost (a very real gotcha: Google's real redirect_uri check is an exact string
- * match, and 127.0.0.1 and localhost are different strings even though they resolve to
- * the same host).
+ * trailing slash, http instead of https, a dropped path segment, or an adjacent wrong port
+ * number.
+ *
+ * Fix round: `localhost-127` (`http://127.0.0.1:<PORT>/...`) was dropped. Docs/SPEC.md
+ * hard constraint 2 documents `127.0.0.1` as the legitimate fallback base URL for reaching
+ * this very server, so using the same literal host as a WRONG decoy here contradicted that
+ * advice rather than illustrating a genuine OAuth gotcha.
  */
 export function resolveWrongRedirectUri(variant: string): string {
   const port = PORT;
@@ -90,8 +103,8 @@ export function resolveWrongRedirectUri(variant: string): string {
       return POSTMAN_INTERCEPT_REDIRECT_URI.replace('https://', 'http://');
     case 'pstmn-no-v1':
       return 'https://oauth.pstmn.io/callback';
-    case 'localhost-127':
-      return `http://127.0.0.1:${port}/_trainer/oauth/callback`;
+    case 'localhost-wrong-port':
+      return `http://localhost:${port + 1}/_trainer/oauth/callback`;
     case 'localhost-trailing-slash':
       return `${trainerCallbackRedirectUri()}/`;
     case 'localhost-no-trainer-prefix':
@@ -131,14 +144,17 @@ function nowSec(): number {
 }
 
 /** Called by `consent.ts`'s POST handler once a consent has been approved with a valid,
- *  registered redirect_uri. Exported so consent.ts (the authorize half of the flow) and
- *  oauth.ts (the token half) share one code-issuance implementation. */
-export function issueAuthorizationCode(redirectUri: string, scopes: string[]): string {
+ *  registered redirect_uri AND a registered client_id. Exported so consent.ts (the
+ *  authorize half of the flow) and oauth.ts (the token half) share one code-issuance
+ *  implementation. `clientId` binds the code (shared/src/world.ts's `GoogleAuthCode`
+ *  doc comment: Task 6 fix round, finding 5). */
+export function issueAuthorizationCode(redirectUri: string, scopes: string[], clientId: string): string {
   const world = activeWorld();
   const code = mintAuthCode();
   world.google.authCodes[code] = {
     redirectUri,
     scopes,
+    clientId,
     expiresAt: nowSec() + 60, // docs/SPEC.md section 11: "Codes are single-use, 60s TTL."
     used: false,
   };
@@ -147,17 +163,28 @@ export function issueAuthorizationCode(redirectUri: string, scopes: string[]): s
 
 // --- POST /oauth2/token (docs/SPEC.md section 11) ---------------------------------------
 
+/**
+ * Reads one form field as a string. Duplicate form keys (`a=1&a=2`) parse as an array
+ * under `express.urlencoded`; this project has no legitimate multi-valued form field
+ * anywhere in the OAuth flow, so an array collapses to its FIRST value rather than being
+ * silently dropped (the same class of bug fixed in `consent.ts`'s `queryToStringMap`,
+ * fix round finding: adversarial testing found duplicate query params minting a
+ * scope-less code; the same defensive fix belongs here too, for the body side of every
+ * one of this file's own handlers).
+ */
 function readBodyField(body: unknown, key: string): string {
   const record = (body ?? {}) as Record<string, unknown>;
   const value = record[key];
-  return typeof value === 'string' ? value : '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    const first = value[0];
+    return typeof first === 'string' ? first : '';
+  }
+  return '';
 }
 
-function clientCredentialsMatch(req: Request): boolean {
-  const world = activeWorld();
-  const clientId = readBodyField(req.body, 'client_id');
-  const clientSecret = readBodyField(req.body, 'client_secret');
-  return clientId === world.google.clientId && clientSecret === world.google.clientSecret;
+function clientSecretMatches(req: Request): boolean {
+  return readBodyField(req.body, 'client_secret') === activeWorld().google.clientSecret;
 }
 
 function handleAuthorizationCodeGrant(req: Request, res: Response): void {
@@ -178,7 +205,12 @@ function handleAuthorizationCodeGrant(req: Request, res: Response): void {
     res.status(400).json(redirectUriMismatchError());
     return;
   }
-  if (!clientCredentialsMatch(req)) {
+  // Client binding (Task 6 fix round, finding 5): the exchanging client_id must match the
+  // one this SPECIFIC code was issued to (record.clientId), not merely be A valid client
+  // id in general. With exactly one real client per World the two checks are currently
+  // equivalent in practice, but this is the RFC 6749 section 4.1.3-correct, code-scoped
+  // check, not a shortcut through World's global config.
+  if (record.clientId !== readBodyField(req.body, 'client_id') || !clientSecretMatches(req)) {
     res.status(401).json(invalidClientError());
     return;
   }
@@ -187,18 +219,13 @@ function handleAuthorizationCodeGrant(req: Request, res: Response): void {
 
   const accessToken = mintAccessToken();
   const refreshToken = mintRefreshToken();
-  // t3-revoked-refresh's one-shot fault: consumed here, on the FIRST authorization_code
-  // grant to reach this point after it was armed, so a second, genuinely new consent
-  // later in the same run mints a normal, live refresh token.
-  const bornRevoked = world.google.revokeNextRefreshToken;
-  if (bornRevoked) world.google.revokeNextRefreshToken = false;
 
   world.google.issuedTokens[accessToken] = {
     scopes: record.scopes,
     expiresAt: nowSec() + world.google.accessTokenTtlSec,
     pairedRefreshToken: refreshToken,
   };
-  world.google.refreshTokens[refreshToken] = { scopes: record.scopes, revoked: bornRevoked };
+  world.google.refreshTokens[refreshToken] = { scopes: record.scopes, clientId: record.clientId, revoked: false };
 
   res.json({
     access_token: accessToken,
@@ -218,7 +245,9 @@ function handleRefreshTokenGrant(req: Request, res: Response): void {
     res.status(400).json(invalidGrantError());
     return;
   }
-  if (!clientCredentialsMatch(req)) {
+  // Same client-binding check as the authorization_code grant above: this refresh token's
+  // own bound client, not just "some" valid client.
+  if (record.clientId !== readBodyField(req.body, 'client_id') || !clientSecretMatches(req)) {
     res.status(401).json(invalidClientError());
     return;
   }

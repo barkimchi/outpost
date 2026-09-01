@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
-import { redirectUriMismatchPage } from './fixtures.js';
-import { isRegisteredRedirectUri, issueAuthorizationCode } from './oauth.js';
+import { invalidClientPage, redirectUriMismatchPage } from './fixtures.js';
+import { isRegisteredClientId, isRegisteredRedirectUri, issueAuthorizationCode } from './oauth.js';
 
 /**
  * `GET`/`POST /o/oauth2/v2/auth` (docs/SPEC.md section 11): the consent half of the OAuth
@@ -33,10 +33,28 @@ function describeScope(scope: string): string {
   return SCOPE_DESCRIPTIONS[scope] ?? scope;
 }
 
+/**
+ * Fix round (adversarial testing found `?scope=a&scope=b` minted a scope-less code):
+ * Express's `qs` parser turns a repeated query key into an ARRAY, not a string, and the
+ * original version here only handled `typeof value === 'string'`, silently DROPPING the
+ * key entirely for any duplicate. Every OAuth param this mock cares about is logically a
+ * single value (a repeated one is either an accident or an attempt to smuggle a second
+ * value past whichever check reads the "first" one), so an array now joins its string
+ * entries with a space, matching how a legitimate multi-token value like `scope` is
+ * itself space-delimited, rather than vanishing.
+ */
 function queryToStringMap(query: Request['query']): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(query)) {
-    if (typeof value === 'string') out[key] = value;
+    if (typeof value === 'string') {
+      out[key] = value;
+    } else if (Array.isArray(value)) {
+      const joined = value.filter((v): v is string => typeof v === 'string').join(' ');
+      if (joined !== '') out[key] = joined;
+    }
+    // Anything else (a nested object, from Express's extended query parser) is dropped:
+    // no legitimate OAuth param is ever shaped that way, and there is nothing sensible to
+    // stringify it into.
   }
   return out;
 }
@@ -101,13 +119,34 @@ export function handleAuthorize(req: Request, res: Response): void {
     res.status(400).type('html').send(redirectUriMismatchPage(redirectUri));
     return;
   }
+  // Client binding (Task 6 fix round, finding 5): checked BEFORE rendering the consent
+  // page, matching real Google (an unrecognized client never gets as far as a consent
+  // screen at all). Previously any client_id, including a garbage one, rendered the page
+  // and (on approval) got a real code issued.
+  if (!isRegisteredClientId(params.client_id)) {
+    res.status(401).type('html').send(invalidClientPage(params.client_id));
+    return;
+  }
   res.type('html').send(renderConsentPage(params));
 }
 
+/**
+ * Same duplicate-key defense as `queryToStringMap` above, for form fields: an array
+ * collapses via the same space-join, not silent loss. Consistent on purpose: this reads
+ * the exact hidden fields that page rendered from `queryToStringMap`'s own output, so a
+ * duplicate `scope` value that survived the GET step must survive identically through the
+ * POST step, not vanish partway (or be treated differently) just because it crossed from
+ * query string to form body.
+ */
 function readField(body: unknown, key: string): string | undefined {
   const record = (body ?? {}) as Record<string, unknown>;
   const value = record[key];
-  return typeof value === 'string' ? value : undefined;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    const joined = value.filter((v): v is string => typeof v === 'string').join(' ');
+    return joined === '' ? undefined : joined;
+  }
+  return undefined;
 }
 
 export function handleConsentSubmit(req: Request, res: Response): void {
@@ -117,6 +156,14 @@ export function handleConsentSubmit(req: Request, res: Response): void {
     // there is no server-side record of "the GET already checked this." The hidden field
     // is the only carrier, and it must be checked again on its own.
     res.status(400).type('html').send(redirectUriMismatchPage(redirectUri));
+    return;
+  }
+  const clientId = readField(req.body, 'client_id');
+  if (!isRegisteredClientId(clientId)) {
+    // Also re-validated here, same statelessness reasoning as redirect_uri above: a
+    // tampered or forged client_id hidden field must be caught again, not trusted because
+    // the GET step (which the POST never proves actually happened) supposedly checked it.
+    res.status(401).type('html').send(invalidClientPage(clientId));
     return;
   }
 
@@ -132,7 +179,7 @@ export function handleConsentSubmit(req: Request, res: Response): void {
 
   const scopeStr = readField(req.body, 'scope') ?? '';
   const scopes = scopeStr.split(/\s+/).filter(Boolean);
-  const code = issueAuthorizationCode(redirectUri, scopes);
+  const code = issueAuthorizationCode(redirectUri, scopes, clientId);
 
   const qs = new URLSearchParams({ code });
   if (state !== undefined) qs.set('state', state);

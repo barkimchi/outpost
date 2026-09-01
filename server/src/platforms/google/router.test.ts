@@ -150,6 +150,119 @@ test('GET /o/oauth2/v2/auth with no redirect_uri at all is also a mismatch, not 
   }
 });
 
+// --- Client binding (Task 6 fix round, finding 5) -----------------------------------------
+
+test('GET /o/oauth2/v2/auth with an unregistered client_id returns 401 Error 401: invalid_client, before any consent page renders', async () => {
+  ctxOf();
+  const { server, port } = await listen();
+  try {
+    const url = new URL(`http://127.0.0.1:${port}/google/o/oauth2/v2/auth`);
+    url.searchParams.set('client_id', 'not-the-real-client-id');
+    url.searchParams.set('redirect_uri', REDIRECT_URI);
+    url.searchParams.set('response_type', 'code');
+    const res = await fetch(url);
+    assert.equal(res.status, 401);
+    const html = await res.text();
+    assert.ok(html.includes('Error 401: invalid_client'));
+    assert.ok(html.includes('not-the-real-client-id'));
+    assert.ok(!html.includes('Choose an account'), 'the consent page itself must never render for an unregistered client');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST consent submit with an unregistered client_id also returns 401 invalid_client, and issues no code', async () => {
+  ctxOf();
+  const { server, port } = await listen();
+  try {
+    const before = Object.keys(activeWorld().google.authCodes).length;
+    const res = await approveConsent(port, { redirectUri: REDIRECT_URI, scope: BASELINE_SCOPE, clientId: 'garbage-client-id' });
+    assert.equal(res.status, 401);
+    const html = await res.text();
+    assert.ok(html.includes('Error 401: invalid_client'));
+    assert.equal(Object.keys(activeWorld().google.authCodes).length, before, 'no code may be issued for an unregistered client');
+  } finally {
+    server.close();
+  }
+});
+
+test('exchanging a valid code with the WRONG client_id (right secret) returns invalid_client: the code is bound to the client that requested it, not just any known secret', async () => {
+  const ctx = ctxOf();
+  const { server, port } = await listen();
+  try {
+    const approve = await approveConsent(port, { redirectUri: REDIRECT_URI, scope: BASELINE_SCOPE, clientId: ctx.clientId });
+    const code = extractCode(approve.headers.get('location') ?? '');
+    const res = await exchangeCode(port, { code, redirectUri: REDIRECT_URI, clientId: 'a-different-client-id', clientSecret: ctx.clientSecret });
+    assert.equal(res.status, 401);
+    assert.deepEqual(await res.json(), { error: 'invalid_client', error_description: 'Unauthorized' });
+  } finally {
+    server.close();
+  }
+});
+
+test('refreshing with the WRONG client_id (right secret) returns invalid_client', async () => {
+  const ctx = ctxOf();
+  const { server, port } = await listen();
+  try {
+    const { refreshToken } = await getFreshAccessToken(port, ctx);
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: 'a-different-client-id',
+      client_secret: ctx.clientSecret,
+    });
+    const res = await fetch(`http://127.0.0.1:${port}/google/oauth2/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+    assert.equal(res.status, 401);
+    assert.deepEqual(await res.json(), { error: 'invalid_client', error_description: 'Unauthorized' });
+  } finally {
+    server.close();
+  }
+});
+
+// --- Duplicate query/form params (Minors: adversarial testing found `?scope=a&scope=b`
+// minting a scope-less code) ---------------------------------------------------------------
+
+test('a duplicate query param on the GET (an array under Express) does not silently vanish from the consent page', async () => {
+  const ctx = ctxOf();
+  const { server, port } = await listen();
+  try {
+    const res = await fetch(
+      `http://127.0.0.1:${port}/google/o/oauth2/v2/auth?client_id=${ctx.clientId}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=openid&scope=email`,
+    );
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    // The two duplicate values must survive, space-joined, not disappear.
+    assert.ok(html.includes('name="scope" value="openid email"'));
+  } finally {
+    server.close();
+  }
+});
+
+test('a duplicate scope form field on the POST does not mint a scope-less code', async () => {
+  const ctx = ctxOf();
+  const { server, port } = await listen();
+  try {
+    const rawBody = `client_id=${encodeURIComponent(ctx.clientId)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&approve=1&scope=openid&scope=email`;
+    const res = await fetch(`http://127.0.0.1:${port}/google/o/oauth2/v2/auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: rawBody,
+      redirect: 'manual',
+    });
+    assert.equal(res.status, 302);
+    const code = extractCode(res.headers.get('location') ?? '');
+    const record = activeWorld().google.authCodes[code];
+    assert.ok(record);
+    assert.deepEqual(record?.scopes, ['openid', 'email'], 'both duplicate scope values must survive into the issued code, not vanish');
+  } finally {
+    server.close();
+  }
+});
+
 // --- POST /o/oauth2/v2/auth: consent submission ------------------------------------------
 
 test('approving consent with a valid redirect_uri issues a single-use code via a 302 redirect', async () => {

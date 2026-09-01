@@ -60,10 +60,15 @@ export interface GoogleIssuedToken {
  * exchange fails with `redirect_uri_mismatch` rather than `invalid_grant` (real Google's
  * distinction between the two errors, matched here). `used` enforces single-use: a second
  * exchange attempt with the same code, even before it expires, is `invalid_grant`.
+ * `clientId` binds the code to the client that requested it (Task 6 fix round: RFC 6749
+ * section 4.1.3 and real Google both require the token exchange's `client_id` to match the
+ * one the authorization request used; a token exchange presenting a DIFFERENT client_id,
+ * even a syntactically valid one, is `invalid_client`, not silently accepted).
  */
 export interface GoogleAuthCode {
   redirectUri: string;
   scopes: string[];
+  clientId: string;
   /** Unix seconds. */
   expiresAt: number;
   used: boolean;
@@ -75,10 +80,12 @@ export interface GoogleAuthCode {
  * exchange reuses the same refresh token string and mints a new access token with the
  * SAME scopes this record was issued with. This is exactly why `t3-insufficient-scope`
  * cannot be fixed by refreshing: refreshing never changes `scopes`, only a brand new
- * consent (a fresh authorization code requesting the added scope) can.
+ * consent (a fresh authorization code requesting the added scope) can. `clientId` is the
+ * same client-binding requirement as `GoogleAuthCode.clientId` above.
  */
 export interface GoogleRefreshToken {
   scopes: string[];
+  clientId: string;
   revoked: boolean;
 }
 
@@ -93,8 +100,6 @@ export interface World {
   google: {
     clientId: string;
     clientSecret: string;
-    grantedScopes: string[];
-    requestedScopes: string[];
     accessTokenTtlSec: number;
     /** Keyed by the literal access token string. */
     issuedTokens: Record<string, GoogleIssuedToken>;
@@ -102,17 +107,6 @@ export interface World {
     authCodes: Record<string, GoogleAuthCode>;
     /** Keyed by the literal refresh token string (Task 6). */
     refreshTokens: Record<string, GoogleRefreshToken>;
-    /**
-     * One-shot switch (Task 6, `t3-revoked-refresh`): when true, the NEXT
-     * `authorization_code` grant this run mints a refresh token that is already
-     * `revoked: true`, then flips this back to false. Models "ops rotated the refresh
-     * token before the integration ever got to use it" without needing a timer or a
-     * second live request: the learner's fix is a genuinely new `authorization_code`
-     * grant (this flag having already been consumed), never a `refresh_token` grant
-     * against the dead one, matching the curriculum's "diagnose invalid_grant and
-     * re-auth" (not "diagnose invalid_grant and retry the same refresh").
-     */
-    revokeNextRefreshToken: boolean;
   };
   glean: {
     instance: string;

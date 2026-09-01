@@ -36,8 +36,14 @@ export function resetState(ctx: RunContext): void {
     google: {
       clientId: ctx.google.clientId,
       clientSecret: ctx.google.clientSecret,
-      grantedScopes: [...ctx.google.grantedScopes],
-      requestedScopes: [...ctx.google.requestedScopes],
+      // Task 6 fix round: World.google no longer mirrors ctx.google.grantedScopes /
+      // requestedScopes. Both were write-only (populated here, read nowhere): this
+      // mock's actual OAuth semantics are entirely request-driven, whatever scope
+      // string a live authorize request carries becomes the granted set on the
+      // resulting code/token, so a separate "granted vs requested" World field never
+      // had a real behavioral role to play. RunContext.google still carries both
+      // fields (shared/src/scenario.ts section 8 is a frozen contract this task does
+      // not reshape); only World's redundant, unread copies were removed.
       accessTokenTtlSec: ctx.google.accessTokenTtlSec,
       // Empty baseline: populated live as `platforms/google/oauth.ts` issues codes and
       // tokens during the run (Task 6). A scenario's `setup` may pre-populate any of
@@ -46,7 +52,6 @@ export function resetState(ctx: RunContext): void {
       issuedTokens: {},
       authCodes: {},
       refreshTokens: {},
-      revokeNextRefreshToken: false,
     },
     glean: {
       instance: ctx.glean.instance,

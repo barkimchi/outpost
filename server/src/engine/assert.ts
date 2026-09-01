@@ -270,8 +270,45 @@ export function evaluateAssertions(
   return { pass: true };
 }
 
-/** Registry for `Assertion{kind:'custom'}` (docs/SPEC.md section 8: "resolved by id in
- *  engine/assert.ts against a small registry"). Empty for scenarios 1-7, which are all
- *  expressible with the declarative kinds; later tiers (e.g. a decoded Slack cursor, a
- *  recomputed HMAC) register here. */
-export const customAssertions: Record<string, CustomAssertion> = {};
+/**
+ * Registry for `Assertion{kind:'custom'}` (docs/SPEC.md section 8: "resolved by id in
+ * engine/assert.ts against a small registry"). Empty through scenarios 1-7, which are all
+ * expressible with the declarative kinds.
+ *
+ * `t3-redirect-progress` (Task 6 fix round, finding 1): `t3-redirect-mismatch`'s step 1
+ * matches BOTH `GET` and `POST /google/o/oauth2/v2/auth`, because the wrong-URI failure
+ * mode is a GET returning 400 (the consent page never renders at all, so there is no form
+ * to POST), and a matcher that only accepted POST left that entire failure path invisible
+ * to the engine: three wrong GETs produced zero attempts and never unlocked a hint, a
+ * violation of hard constraint 9 in the flagship tier-3 scenario's primary failure mode.
+ * Widening the matcher's `method` alone is not enough, though: GET and POST have two
+ * DIFFERENT success shapes (a correct GET renders the consent page, 200, no `Location`
+ * header at all; a correct POST-approve redirects, 302, WITH one), so a single declarative
+ * `status`/`headerMatches` pair cannot express "pass" for both without also either
+ * false-failing a correct GET (no Location header to match) or false-passing a POST that
+ * merely DENIED consent (also a 302, just without a code). This custom assertion expresses
+ * that logic directly: fail on any 400 (the mismatch, whichever method produced it, with a
+ * reason naming the method); for a POST, additionally require the redirect to actually
+ * carry `code=` (so a deliberate `approve=0` denial cannot pass); anything else (a plain,
+ * correct GET) passes.
+ */
+export const customAssertions: Record<string, CustomAssertion> = {
+  't3-redirect-progress': (ev) => {
+    if (ev.status === 400) {
+      return {
+        pass: false,
+        reason: `${ev.method} to the authorize endpoint returned 400: the callback URL does not exactly match one of the registered ones`,
+      };
+    }
+    if (ev.method === 'POST') {
+      const location = ev.resHeaders['location'] ?? '';
+      if (!/[?&]code=/.test(location)) {
+        return {
+          pass: false,
+          reason: 'the consent POST did not come back with a code-bearing redirect (check that approve=1 was actually sent)',
+        };
+      }
+    }
+    return { pass: true };
+  },
+};

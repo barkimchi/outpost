@@ -6,6 +6,7 @@ import { rawBodyMiddlewares } from './middleware/rawBody.js';
 import { requestLog, emitBodyParserFailureEvent } from './middleware/requestLog.js';
 import { faultInjector } from './middleware/faultInjector.js';
 import { createTrainerRouter } from './trainer/router.js';
+import { oauthCallbackHandler } from './trainer/oauthCallback.js';
 import { createGithubRouter } from './platforms/github/router.js';
 import { createGoogleRouter } from './platforms/google/router.js';
 
@@ -23,8 +24,10 @@ import { createGoogleRouter } from './platforms/google/router.js';
  *                        short-circuiting with its verbatim response when one matches
  *                        (wired to `engine.activeInterceptFault()` in the Task 3 fix round,
  *                        see `middleware/faultInjector.ts`).
- *   4. /_trainer         trainer router: health, proxy, SSE now; scenarios API, workspace,
- *                        docs, OAuth callback land here in later tasks.
+ *   4. /_trainer         GET /_trainer/oauth/callback (trainer/oauthCallback.ts, mounted
+ *                        directly on app.ts, registered before the router below) plus the
+ *                        trainer router itself: health, proxy, SSE, scenarios API,
+ *                        workspace, docs.
  *   5. platform routers  /github /google /glean /slack (healthy behavior only). /github
  *                        lands in Task 2, /google in Task 6; /glean /slack are not
  *                        mounted yet.
@@ -37,7 +40,9 @@ import { createGoogleRouter } from './platforms/google/router.js';
  *
  * Task 0 wired step 4's health check (now moved into trainer/router.ts) and steps 6-7.
  * Task 1 wired steps 1-4 for real and gated step 6 on production. Task 2 mounts /github
- * in step 5.
+ * in step 5. Task 6 fix round adds the OAuth callback route to step 4: the built-in UI's
+ * registered redirect URI was already minting real codes to this path with nothing
+ * serving it, a 404 the original round's scoping missed.
  */
 
 const PLATFORM_PREFIXES = ['/github', '/google', '/glean', '/slack', '/_trainer'];
@@ -76,6 +81,15 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use(faultInjector);
 
   // --- 4. /_trainer ---
+  // The OAuth callback is registered here, on app.ts itself, BEFORE the /_trainer router
+  // mount, rather than inside trainer/router.ts (Task 6 fix round: Task 5 owns
+  // trainer/router.ts this round; this endpoint's own file, trainer/oauthCallback.ts, is
+  // this task's to build, and app.ts's mounting is explicitly this task's too). Express
+  // tries routes in registration order, so this specific path is served before the
+  // general /_trainer router ever sees it; that router has no route for it either way and
+  // would just fall through, but registering the specific path first is the explicit,
+  // order-independent way to say so.
+  app.get('/_trainer/oauth/callback', oauthCallbackHandler);
   app.use('/_trainer', createTrainerRouter());
 
   // --- 5. platform routers (/github, /google now; /glean /slack land in later tasks) ---
