@@ -38,8 +38,13 @@ export function TicketTab(): React.JSX.Element {
        *  reference panel, which is already close to 68ch itself. */}
       <div className="mx-auto max-w-[68ch]">
         <div className="mb-3 flex flex-wrap items-center gap-1.5">
-          {scenario.tier !== undefined && <Tag>Tier {scenario.tier}</Tag>}
-          {scenario.platform && <Tag>{scenario.platform}</Tag>}
+          {/* Drill mode (docs/SPEC.md section 9): "only ticketMd and step count are
+           *  exposed." Tier and platform are fault-adjacent identity (they narrow which of
+           *  the four mock platforms and which difficulty band this run is), so both stay
+           *  hidden for the length of a drill, the same way title and scenarioId already
+           *  do server-side. */}
+          {!scenario.drill && scenario.tier !== undefined && <Tag>Tier {scenario.tier}</Tag>}
+          {!scenario.drill && scenario.platform && <Tag>{scenario.platform}</Tag>}
           {scenario.drill && <Tag accent>Drill</Tag>}
           {scenario.seed && <span className="ml-auto font-mono text-[10px] text-gym-text-faint">run #{scenario.seed}</span>}
         </div>

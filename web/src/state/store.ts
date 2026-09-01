@@ -86,6 +86,18 @@ export interface ScenarioSlice {
   drill: boolean;
   seed?: string;
   ticketMd?: string;
+  /** `ScenarioDef.docsRef`: the doc id(s) this scenario actually needs, e.g. the
+   *  capstone's `['google-oauth', 'glean']`. The server has put this on the wire since a
+   *  prior fix round (`buildActivatedPayload()`/`getState()` in
+   *  `server/src/engine/engine.ts`, and the `scenario:activated` SSE event spreads the
+   *  same payload), and `shared/src/api.ts`'s `ActivatedPayload`/`EnginePublicState` now
+   *  declare it too (a concurrent server-side round fixed engine.ts's own rival copies of
+   *  those interfaces, the actual reason this field survived three prior fix rounds
+   *  unread: the server's `res.json()` carried it while the type the web client imported
+   *  never did). Still, until this task, nothing on the WEB side ever read it: the Docs
+   *  tab always auto-selected `docs[0]`, opening on GitHub regardless of which
+   *  platform(s) the active scenario touches. Always present, `[]` when idle. */
+  docsRef: string[];
   steps: StepChip[];
   currentStepIndex: number;
   stepCount: number;
@@ -235,6 +247,7 @@ function defaultScenarioSlice(): ScenarioSlice {
   return {
     state: 'idle',
     drill: false,
+    docsRef: [],
     steps: [],
     currentStepIndex: 0,
     stepCount: 0,
@@ -250,7 +263,26 @@ function newKeyValueRow(): KeyValueRow {
   return { id: crypto.randomUUID(), key: '', value: '', enabled: true };
 }
 
-function activatedPayloadToSlice(payload: ActivatedPayload): ScenarioSlice {
+/**
+ * `docsRef` (Task 8 fix round, this task's finding 1) is now properly typed on
+ * `ActivatedPayload`/`EnginePublicState` (`shared/src/api.ts`, fixed in the concurrent
+ * server round: `engine.ts` used to declare its own rival copies of both interfaces,
+ * which is exactly how a field that reached the wire could stay invisible to the type the
+ * web client imports). One gap remains, and it is out of this task's reach: the
+ * `scenario:activated` SSE event's shared type, `shared/src/events.ts`'s
+ * `ScenarioActivatedEvent`, still does not declare `docsRef`, even though the server
+ * actually spreads the full activated payload onto that event at runtime (`engine.ts`:
+ * `emit({ type: 'scenario:activated', ts: Date.now(), ...payload })`, `payload` being the
+ * SAME `docsRef`-bearing `ActivatedPayload` built for the REST response). `shared/**` is
+ * off limits here, so `activatedPayloadToSlice` takes this widened local type instead of
+ * `ActivatedPayload` directly: identical to `ActivatedPayload` except `docsRef` is
+ * optional, which both a real `ActivatedPayload` (docsRef required, so trivially
+ * compatible) and a `ScenarioActivatedEvent` (docsRef absent from its type, but optional
+ * target properties never need to be present) satisfy without a cast.
+ */
+type ActivatedPayloadLike = Omit<ActivatedPayload, 'docsRef'> & { docsRef?: string[] };
+
+function activatedPayloadToSlice(payload: ActivatedPayloadLike): ScenarioSlice {
   return {
     state: 'active',
     scenarioId: payload.scenarioId,
@@ -261,6 +293,7 @@ function activatedPayloadToSlice(payload: ActivatedPayload): ScenarioSlice {
     drill: payload.drill,
     seed: payload.seed,
     ticketMd: payload.ticketMd,
+    docsRef: payload.docsRef ?? [],
     steps: (payload.steps ?? []).map((s) => ({ id: s.id, title: s.title, done: false })),
     currentStepIndex: 0,
     stepCount: payload.stepCount,
@@ -283,6 +316,7 @@ function engineStateToSlice(s: EnginePublicState): ScenarioSlice {
     platform: s.platform,
     drill: s.drill ?? false,
     ticketMd: s.ticketMd,
+    docsRef: s.docsRef ?? [],
     steps: (s.steps ?? []).map((st) => ({ id: st.id, title: st.title, done: st.done })),
     currentStepIndex: s.currentStepIndex ?? 0,
     stepCount: s.stepCount ?? s.steps?.length ?? 0,

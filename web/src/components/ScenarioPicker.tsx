@@ -69,8 +69,11 @@ export function ScenarioPicker(): React.JSX.Element {
   }, [scenarios]);
 
   const currentEntry = scenarios.find((s) => s.id === current.scenarioId);
+  // Drill mode (docs/SPEC.md section 9): tier is fault-adjacent identity, hidden for the
+  // length of a drill same as title/platform in TicketTab, so the label just says "Drill",
+  // never "Drill, tier 3".
   const label = current.drill
-    ? `Drill${current.tier ? `, tier ${current.tier}` : ''}`
+    ? 'Drill'
     : current.scenarioId
       ? (currentEntry?.title ?? current.title ?? current.scenarioId)
       : 'Select a scenario';

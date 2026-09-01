@@ -64,12 +64,68 @@ export function formatClockTime(ts: number): string {
 }
 
 /** Best-effort JSON pretty-print. Returns the original text, unchanged, if it does not
- *  parse as JSON (a body is not obligated to be JSON). */
+ *  parse as JSON (a body is not obligated to be JSON). Used verbatim by the Logs tab and
+ *  the Raw response tab, both of which are meant to show the literal bytes that crossed
+ *  the wire; `prettyJsonForDisplay` below is the annotated variant for the Pretty tab. */
 export function tryPrettyJson(text: string): { pretty: string; isJson: boolean } {
   if (text.trim() === '') return { pretty: text, isJson: false };
   try {
     const parsed: unknown = JSON.parse(text);
     return { pretty: JSON.stringify(parsed, null, 2), isJson: true };
+  } catch {
+    return { pretty: text, isJson: false };
+  }
+}
+
+/** `YYYY-MM-DD HH:MM:SS` in the viewer's local time, for a raw epoch-millisecond value
+ *  like `getdocumentstatus`'s `indexedAt`. Deliberately not `formatClockTime`'s
+ *  HH:MM:SS.mmm (that one is for comparing log rows a fraction of a second apart; this one
+ *  is for reading a timestamp as a date, where sub-second precision only adds noise). */
+export function formatEpochMs(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// A conservative key-name pattern for "this number is probably an epoch-millisecond
+// timestamp": ends in a capital-letter "At"/"Ts", or is exactly "ts"/"timestamp". Excludes
+// plain lowercase endings like "state", "rate", "date" on purpose, favoring missing an
+// unusual field name over mislabeling an unrelated number as a date.
+const TIMESTAMP_KEY = /(?:^ts$|^timestamp$|[a-z](?:At|Ts|Timestamp)$)/;
+const MIN_EPOCH_MS = 978307200000; // 2001-01-01, well before this app existed
+const MAX_EPOCH_MS = 4102444800000; // 2100-01-01, generously in the future
+
+function looksLikeEpochMs(key: string, value: unknown): value is number {
+  return typeof value === 'number' && TIMESTAMP_KEY.test(key) && value >= MIN_EPOCH_MS && value <= MAX_EPOCH_MS;
+}
+
+function annotateTimestamps(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(annotateTimestamps);
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = looksLikeEpochMs(key, v) ? `${v} (${formatEpochMs(v)})` : annotateTimestamps(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Same as `tryPrettyJson`, but a field shaped like an epoch-millisecond timestamp (spec
+ * example: `getdocumentstatus`'s `indexedAt`, e.g. `1735689600123`, unreadable at a
+ * glance) gets a human-readable date appended alongside it. Only for the Response panel's
+ * Pretty tab: the underlying `response.body` string this reads from, and everywhere else
+ * that shows it (Raw tab, the Logs tab's request/response body dumps, the `</> Code`
+ * export), keep showing the exact literal bytes untouched, since those are meant to be
+ * evidence, not a product surface. The annotation is still valid JSON (a string, not a
+ * bare number), so it stays parseable and syntax-highlights cleanly.
+ */
+export function prettyJsonForDisplay(text: string): { pretty: string; isJson: boolean } {
+  if (text.trim() === '') return { pretty: text, isJson: false };
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return { pretty: JSON.stringify(annotateTimestamps(parsed), null, 2), isJson: true };
   } catch {
     return { pretty: text, isJson: false };
   }

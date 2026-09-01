@@ -13,9 +13,11 @@ import { Modal } from '../Modal.js';
  *  1: "single process, single port") the built-in UI is served from that same origin, so
  *  this fires. Under `npm run dev` (Vite on 5173, proxying `/_trainer` and `/google`
  *  through to the trainer server's fixed port) the popup still lands on the trainer
- *  server's own origin because the redirect URI registered with the Google mock is the
- *  literal, hardcoded `http://localhost:4600/_trainer/oauth/callback` (spec section 11),
- *  not whatever port the popup was opened through; the browser then refuses to deliver a
+ *  server's own origin because the redirect URI registered with the Google mock is derived
+ *  from the live `PORT` the trainer server is actually running on
+ *  (`server/src/platforms/google/oauth.ts`'s `builtInUICallbackUri()`, `http://localhost:
+ *  <PORT>/_trainer/oauth/callback`, defaulting to 4600, spec section 11), not whatever port
+ *  the popup was opened through; the browser then refuses to deliver a
  *  message whose target origin does not match the opener's, so automatic capture cannot
  *  fire across that split. This is a known dev-only limitation, not a bug in this
  *  listener: the manual paste fallback below covers it, and `npm start` (single port) is

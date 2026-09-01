@@ -90,6 +90,7 @@ function activatedPayload(overrides: Partial<ActivatedPayload> = {}): ActivatedP
     steps: [{ id: 'step-1', title: 'Authenticate' }],
     stepCount: 1,
     drill: false,
+    docsRef: ['github'],
     ...overrides,
   };
 }

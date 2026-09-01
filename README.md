@@ -146,8 +146,14 @@ npm test              # lint:style, then server+shared, then web
 ```
 
 `data/progress.json` and `data/workspace.json` hold your solved history, attempt counts,
-explain-back writeups, and saved collections/environments; both are gitignored and never
-touched by anything except your own use of the app. `DELETE /_trainer/api/progress`
-resets solved history and run counts back to a clean slate, but only with an explicit
-`{"confirm": "RESET PROGRESS"}` body; nothing else in this app ever calls it, and there is
-no way to trigger it by accident.
+explain-back writeups, and saved collections/environments; both are gitignored. One
+control in the app can destroy part of that on purpose: **Reset all progress**, a small,
+muted button that lives permanently in the sidebar footer, away from the per-scenario
+`Reset` in the top bar (which just re-seeds the current scenario and is used constantly).
+It calls `DELETE /_trainer/api/progress`, which permanently wipes every scenario's solve
+history, run/attempt counts, and explain-back writeups (each root cause and customer
+reply you have submitted), for every tier. It does not touch collections, environments,
+notes, or the request builder, and there is no undo. The server refuses the request
+without an explicit `{"confirm": "RESET PROGRESS"}` body, and the button only sends that
+body once you have typed the exact phrase into a confirmation modal, not on a click;
+nothing else in this app calls this endpoint.

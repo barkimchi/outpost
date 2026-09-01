@@ -155,6 +155,11 @@ function TabBadge({ count }: { count: number }): React.JSX.Element | null {
 export function RequestBuilder(): React.JSX.Element {
   const request = useStore((s) => s.request);
   const sending = useStore((s) => s.sending);
+  // `serverPort` (from `GET /_trainer/api/health`'s live `port`) drives the placeholder
+  // instead of a literal 4600, since `PORT` overrides the default whenever 4600 is
+  // occupied (README's "Run it"). Falls back to the documented default only for the brief
+  // window before `init()`'s health check resolves.
+  const serverPort = useStore((s) => s.serverPort);
   const setMethod = useStore((s) => s.setMethod);
   const setUrl = useStore((s) => s.setUrl);
   const sendRequest = useStore((s) => s.sendRequest);
@@ -182,6 +187,7 @@ export function RequestBuilder(): React.JSX.Element {
   const { params } = parseUrlParams(request.url);
   const paramCount = params.filter((p) => p.enabled).length;
   const headerCount = request.headers.filter((h) => h.enabled).length;
+  const urlPlaceholder = `http://127.0.0.1:${serverPort ?? 4600}/github/user`;
 
   return (
     <div className="flex shrink-0 flex-col border-b border-gym-border bg-gym-panel">
@@ -203,7 +209,7 @@ export function RequestBuilder(): React.JSX.Element {
             value={request.url}
             onChange={setUrl}
             vars={vars}
-            placeholder="http://127.0.0.1:4600/github/user"
+            placeholder={urlPlaceholder}
             ariaLabel="Request URL"
             className="h-8"
           />

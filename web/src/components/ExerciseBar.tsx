@@ -29,10 +29,16 @@ function StepChips(): React.JSX.Element | null {
     <div className="flex items-center gap-1">
       {chips.map((chip, i) => {
         const isCurrent = scenario.state === 'active' && i === scenario.currentStepIndex;
+        // Drill mode (docs/SPEC.md section 9): "only ticketMd and step count are
+        // exposed." A step's title is exactly the kind of fault identity that's supposed
+        // to stay hidden, and it is the identity leaking one hover at a time if this
+        // tooltip ever shows it, so it is forced back to the anonymous "Step N" form here
+        // regardless of what the chip happens to carry.
+        const title = scenario.drill ? `Step ${i + 1}` : (chip.title ?? `Step ${i + 1}`);
         return (
           <span
             key={chip.id}
-            title={chip.title ?? `Step ${i + 1}`}
+            title={title}
             className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[10px] font-semibold transition-colors ${
               chip.done
                 ? 'bg-gym-green-dim text-gym-green'

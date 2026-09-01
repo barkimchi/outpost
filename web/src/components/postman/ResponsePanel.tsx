@@ -1,7 +1,7 @@
 import { useStore } from '../../state/store.js';
 import type { ResponseViewMode } from '../../state/store.js';
 import { CodeMirrorBox } from '../CodeMirrorBox.js';
-import { formatBytes, formatMs, statusBand, statusText, tryPrettyJson } from '../../lib/format.js';
+import { formatBytes, formatMs, prettyJsonForDisplay, statusBand, statusText } from '../../lib/format.js';
 import { STATUS_BAND_CLASSES } from '../../lib/statusColors.js';
 
 const TABS: Array<{ id: ResponseViewMode; label: string }> = [
@@ -241,9 +241,9 @@ export function ResponsePanel(): React.JSX.Element {
               </table>
             ) : (
               <CodeMirrorBox
-                value={mode === 'pretty' ? tryPrettyJson(response.body).pretty : response.body}
+                value={mode === 'pretty' ? prettyJsonForDisplay(response.body).pretty : response.body}
                 readOnly
-                language={mode === 'pretty' && tryPrettyJson(response.body).isJson ? 'json' : 'none'}
+                language={mode === 'pretty' && prettyJsonForDisplay(response.body).isJson ? 'json' : 'none'}
                 className="h-full"
               />
             )}
