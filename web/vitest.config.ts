@@ -14,5 +14,15 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // `@testing-library/react` registers its own automatic post-test `cleanup()` (unmounts
+    // every render, empties `document.body`) ONLY when it detects a real global `afterEach`
+    // on `globalThis`; every test file here already imports `describe`/`it`/`expect`/etc.
+    // from 'vitest' explicitly (those local imports keep working unchanged, `globals` just
+    // ALSO exposes them on `globalThis`), so this is additive, not a migration. Without it,
+    // component tests silently accumulate DOM across renders within a file, which is
+    // exactly the kind of cross-test collision this build has already burned a full
+    // investigation on once (an intermittent failure that looked like an app bug, turned
+    // out to be tests colliding on ephemeral ports).
+    globals: true,
   },
 });

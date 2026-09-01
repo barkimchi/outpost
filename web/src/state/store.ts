@@ -87,16 +87,16 @@ export interface ScenarioSlice {
   seed?: string;
   ticketMd?: string;
   /** `ScenarioDef.docsRef`: the doc id(s) this scenario actually needs, e.g. the
-   *  capstone's `['google-oauth', 'glean']`. The server has put this on the wire since a
-   *  prior fix round (`buildActivatedPayload()`/`getState()` in
-   *  `server/src/engine/engine.ts`, and the `scenario:activated` SSE event spreads the
-   *  same payload), and `shared/src/api.ts`'s `ActivatedPayload`/`EnginePublicState` now
-   *  declare it too (a concurrent server-side round fixed engine.ts's own rival copies of
-   *  those interfaces, the actual reason this field survived three prior fix rounds
-   *  unread: the server's `res.json()` carried it while the type the web client imported
-   *  never did). Still, until this task, nothing on the WEB side ever read it: the Docs
-   *  tab always auto-selected `docs[0]`, opening on GitHub regardless of which
-   *  platform(s) the active scenario touches. Always present, `[]` when idle. */
+   *  capstone's `['google-oauth', 'glean']`. On the wire (REST activate/state responses
+   *  and the `scenario:activated` SSE event) since a prior fix round, and now properly
+   *  declared on every shared type that carries it (`shared/src/api.ts`'s
+   *  `ActivatedPayload`/`EnginePublicState`, `shared/src/events.ts`'s
+   *  `ScenarioActivatedEvent`), after two concurrent server-side rounds fixed a
+   *  duplicate-interface bug and a missing SSE-event field, respectively; either alone
+   *  would have kept this field unreadable from the web side despite being genuinely on
+   *  the wire. Until this task, nothing on the WEB side ever read it either: the Docs tab
+   *  always auto-selected `docs[0]`, opening on GitHub regardless of which platform(s) the
+   *  active scenario touches. Always present, `[]` when idle. */
   docsRef: string[];
   steps: StepChip[];
   currentStepIndex: number;
@@ -263,26 +263,7 @@ function newKeyValueRow(): KeyValueRow {
   return { id: crypto.randomUUID(), key: '', value: '', enabled: true };
 }
 
-/**
- * `docsRef` (Task 8 fix round, this task's finding 1) is now properly typed on
- * `ActivatedPayload`/`EnginePublicState` (`shared/src/api.ts`, fixed in the concurrent
- * server round: `engine.ts` used to declare its own rival copies of both interfaces,
- * which is exactly how a field that reached the wire could stay invisible to the type the
- * web client imports). One gap remains, and it is out of this task's reach: the
- * `scenario:activated` SSE event's shared type, `shared/src/events.ts`'s
- * `ScenarioActivatedEvent`, still does not declare `docsRef`, even though the server
- * actually spreads the full activated payload onto that event at runtime (`engine.ts`:
- * `emit({ type: 'scenario:activated', ts: Date.now(), ...payload })`, `payload` being the
- * SAME `docsRef`-bearing `ActivatedPayload` built for the REST response). `shared/**` is
- * off limits here, so `activatedPayloadToSlice` takes this widened local type instead of
- * `ActivatedPayload` directly: identical to `ActivatedPayload` except `docsRef` is
- * optional, which both a real `ActivatedPayload` (docsRef required, so trivially
- * compatible) and a `ScenarioActivatedEvent` (docsRef absent from its type, but optional
- * target properties never need to be present) satisfy without a cast.
- */
-type ActivatedPayloadLike = Omit<ActivatedPayload, 'docsRef'> & { docsRef?: string[] };
-
-function activatedPayloadToSlice(payload: ActivatedPayloadLike): ScenarioSlice {
+function activatedPayloadToSlice(payload: ActivatedPayload): ScenarioSlice {
   return {
     state: 'active',
     scenarioId: payload.scenarioId,
@@ -293,7 +274,7 @@ function activatedPayloadToSlice(payload: ActivatedPayloadLike): ScenarioSlice {
     drill: payload.drill,
     seed: payload.seed,
     ticketMd: payload.ticketMd,
-    docsRef: payload.docsRef ?? [],
+    docsRef: payload.docsRef,
     steps: (payload.steps ?? []).map((s) => ({ id: s.id, title: s.title, done: false })),
     currentStepIndex: 0,
     stepCount: payload.stepCount,

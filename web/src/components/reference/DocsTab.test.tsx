@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ActivatedPayload } from '../../types.js';
 
 /**
@@ -46,12 +46,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // This project's vitest config does not set `test.globals: true`, so
-  // `@testing-library/react`'s automatic afterEach-cleanup (which detects a global
-  // `afterEach`) never registers; without an explicit `cleanup()` here, each render in
-  // this file would pile onto the previous one, and `screen`-scoped queries would start
-  // seeing multiple matches across tests.
-  cleanup();
+  // No explicit `cleanup()` needed: `vitest.config.ts`'s `test.globals: true` makes
+  // `@testing-library/react`'s own automatic afterEach-cleanup register itself.
   vi.restoreAllMocks();
 });
 

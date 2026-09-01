@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { useStore } from '../../state/store.js';
 import { TicketTab } from './TicketTab.js';
 
@@ -19,10 +19,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // No `test.globals: true` in this project's vitest config, so RTL's automatic
-  // afterEach-cleanup never registers; without this, `screen`-scoped queries below would
-  // see leftover DOM from the previous test's render.
-  cleanup();
+  // RTL's automatic afterEach-cleanup (registered via `vitest.config.ts`'s
+  // `test.globals: true`) unmounts the render; only the store needs resetting here.
   useStore.setState(initialState, true);
 });
 
