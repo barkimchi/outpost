@@ -69,3 +69,21 @@ An expired or invalid access token returns `401 UNAUTHENTICATED`. A token missin
 ### Using the built-in OAuth 2.0 helper
 
 On the request builder's Auth tab, pick OAuth 2.0, fill in Auth URL (`{{baseUrl}}/o/oauth2/v2/auth`), Token URL (`{{baseUrl}}/oauth2/token`), Client ID, Client Secret, Scope, and Callback URL (the built-in callback listed above), then click "Get New Access Token". The exchange goes through this app's own request proxy, so it shows up in the Logs tab exactly like any other request.
+
+### Automatic popup capture only works under `npm start`
+
+Approving consent in the popup window normally closes it and fills in the access token
+automatically, with no copy-paste. That automatic capture depends on the popup and the
+main app running on the exact same origin, since it works by the callback page
+`postMessage`-ing the code back to the window that opened it.
+
+Under `npm start` (this app's single-port production mode) that is always true. Under
+`npm run dev`, the UI is served from Vite on port 5173 while the API runs on its own
+backend port; the popup's callback page is served from the API's origin, not 5173's, so
+the browser will not deliver its message back to the dev-mode window no matter what this
+app does. This is a real, structural limit of running two different origins in dev, not
+a bug waiting on a fix.
+
+If a scenario needs the OAuth helper, run it under `npm start`. Under `npm run dev`, the
+helper falls back to a manual "paste the code" field after consent, which still works,
+just without the automatic capture.

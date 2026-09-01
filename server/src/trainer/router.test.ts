@@ -184,3 +184,101 @@ test('POST /_trainer/api/scenarios/reset re-activates and returns {ok:true}', as
     server.close();
   }
 });
+
+// --- DELETE /_trainer/api/progress (Task 8, confirm-style contract) -----------------------
+
+async function solveT1ContentType(port: number): Promise<void> {
+  const activateRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/scenarios/t1-content-type/activate`, { method: 'POST' });
+  const activated = (await activateRes.json()) as { ticketMd: string };
+  const patMatch = activated.ticketMd.match(/token (ghp_[A-Za-z0-9]{36})/);
+  const validPat = patMatch?.[1];
+  if (!validPat) throw new Error('ticketMd must embed the PAT to use');
+  const goodRes = await fetch(`http://127.0.0.1:${port}/github/user/repos`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `token ${validPat}` },
+    body: JSON.stringify({ name: 'new-onboarding-repo' }),
+  });
+  if (goodRes.status !== 201) throw new Error(`expected 201, got ${goodRes.status}`);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const explainRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/explain`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ rootCause: 'wrong content type', customerReply: 'fixed the header' }),
+  });
+  if (explainRes.status !== 200) throw new Error(`expected explain to succeed, got ${explainRes.status}`);
+}
+
+test('DELETE /_trainer/api/progress with no confirm token changes nothing (never deletes silently)', async () => {
+  const { server, port } = await listen();
+  try {
+    await solveT1ContentType(port);
+    const beforeRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/scenarios`);
+    const before = (await beforeRes.json()) as Array<{ id: string; solved: boolean; runs: number }>;
+    const beforeSolved = before.find((s) => s.id === 't1-content-type');
+    assert.equal(beforeSolved?.solved, true, 'sanity: t1-content-type must actually be solved before this test');
+
+    const noConfirm = await fetch(`http://127.0.0.1:${port}/_trainer/api/progress`, { method: 'DELETE' });
+    assert.equal(noConfirm.status, 400, 'a DELETE with no confirm body must be rejected, not silently applied');
+
+    const wrongConfirm = await fetch(`http://127.0.0.1:${port}/_trainer/api/progress`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+    assert.equal(wrongConfirm.status, 400, 'a bare truthy confirm value must not satisfy the exact-phrase contract');
+
+    const afterRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/scenarios`);
+    const after = (await afterRes.json()) as Array<{ id: string; solved: boolean; runs: number }>;
+    const afterSolved = after.find((s) => s.id === 't1-content-type');
+    assert.equal(afterSolved?.solved, true, 'progress must be completely unchanged after a rejected DELETE');
+  } finally {
+    server.close();
+  }
+});
+
+test('DELETE /_trainer/api/progress with the exact confirm phrase resets every scenario back to solved:false, runs:0', async () => {
+  const { server, port } = await listen();
+  try {
+    await solveT1ContentType(port);
+    const beforeRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/scenarios`);
+    const before = (await beforeRes.json()) as Array<{ id: string; solved: boolean; runs: number }>;
+    assert.ok(before.some((s) => s.solved || s.runs > 0), 'sanity: there must be real progress to reset');
+
+    const resetRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/progress`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm: 'RESET PROGRESS' }),
+    });
+    assert.equal(resetRes.status, 200);
+    assert.deepEqual(await resetRes.json(), { ok: true });
+
+    const afterRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/scenarios`);
+    const after = (await afterRes.json()) as Array<{ id: string; solved: boolean; runs: number }>;
+    assert.equal(after.length, before.length, 'the reset must not change which scenarios are registered');
+    for (const entry of after) {
+      assert.equal(entry.solved, false, `${entry.id} must be unsolved after a confirmed reset`);
+      assert.equal(entry.runs, 0, `${entry.id} must show zero runs after a confirmed reset`);
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test('a normal activate/solve run never triggers a progress reset on its own', async () => {
+  // Reset is opt-in, explicit-confirm-only (see trainer/router.ts's header comment): this
+  // asserts the OTHER direction of that contract, that ordinary use of the app (the exact
+  // same flow every other test in this file already drives) leaves data/progress.json
+  // growing, never wiped, since nothing in the normal activate/explain path ever calls the
+  // DELETE route.
+  const { server, port } = await listen();
+  try {
+    await solveT1ContentType(port);
+    const afterRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/scenarios`);
+    const after = (await afterRes.json()) as Array<{ id: string; solved: boolean; runs: number }>;
+    const solved = after.find((s) => s.id === 't1-content-type');
+    assert.equal(solved?.solved, true, 'a normal solve must leave real progress behind, not be reset out from under itself');
+    assert.ok((solved?.runs ?? 0) > 0);
+  } finally {
+    server.close();
+  }
+});

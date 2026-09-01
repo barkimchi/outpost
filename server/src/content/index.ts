@@ -16,14 +16,13 @@ import type { DocDetail, DocSummary } from '@gym/shared';
  * `build` script copies `docs/*.md` into `dist/content/docs/` alongside the compiled JS so
  * production reads from the same relative `docs/` folder dev does.
  *
- * Only GitHub and Google OAuth are registered here: those are the two platforms with a
- * working mock behind them as of this task (`platforms/github/**` and the concurrently-
- * built `platforms/google/**`). `docs/PLAN.md`'s Task 8 brief owns "the full
- * `content/docs/*.md` set (one per platform plus auth topics)"; adding Glean and Slack
- * stub pages now, before either platform exists, would risk writing content Task 7's real
- * implementation later contradicts. `variables` and `auth-methods` are genuinely usable
- * today (they document this task's own `{{var}}` resolution and Auth tab), so they are
- * registered now rather than deferred.
+ * Task 5 registered GitHub and Google OAuth here (the two platforms with a working mock
+ * behind them at the time) plus `variables` and `auth-methods`, both genuinely usable
+ * already. Task 8 completes the set: `glean` and `slack` (content written in the Task 7
+ * report, placed here once this task owns `content/**`) and `scripting` (content written
+ * in the Task 9 report for the script engine that task built). Every implementation-track
+ * scenario's `docsRef` must resolve to a real entry here, since those scenarios are meant
+ * to be solvable from this tab alone.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -39,8 +38,11 @@ interface DocEntry {
 const REGISTRY: DocEntry[] = [
   { id: 'github', title: 'GitHub REST API', platform: 'github', file: 'github.md' },
   { id: 'google-oauth', title: 'Google OAuth 2.0', platform: 'google', file: 'google-oauth.md' },
+  { id: 'glean', title: 'Glean API', platform: 'glean', file: 'glean.md' },
+  { id: 'slack', title: 'Slack API', platform: 'slack', file: 'slack.md' },
   { id: 'variables', title: 'Environments and Variables', platform: 'mixed', file: 'variables.md' },
   { id: 'auth-methods', title: 'Authentication Methods', platform: 'mixed', file: 'auth-methods.md' },
+  { id: 'scripting', title: 'Scripting (Pre-request and Tests)', platform: 'mixed', file: 'scripting.md' },
 ];
 
 export function listDocs(): DocSummary[] {

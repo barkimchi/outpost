@@ -118,7 +118,12 @@ test('activate() throws EngineError 404 for an unknown scenario id', () => {
 test('activateDrill() throws EngineError 400 for a tier with no scenarios', () => {
   const engine = freshEngine();
   try {
-    assert.throws(() => engine.activateDrill(6), (err: unknown) => {
+    // Task 8: tier 6 stopped being empty once t6-capstone (track: 'troubleshoot') landed
+    // there, so this now has to reach past the real tier range (1-6) for a genuinely
+    // empty pool, rather than fight the registry's growth the way this exact class of
+    // stale assertion has already bitten this project once (task-8 dispatch: "your new
+    // scenarios will change that count; do not fight it").
+    assert.throws(() => engine.activateDrill(7), (err: unknown) => {
       assert.ok(err instanceof EngineError);
       assert.equal(err.status, 400);
       return true;

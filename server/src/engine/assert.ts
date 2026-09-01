@@ -275,6 +275,12 @@ export function evaluateAssertions(
  * engine/assert.ts against a small registry"). Empty through scenarios 1-7, which are all
  * expressible with the declarative kinds.
  *
+ * `t6-refresh-grant-diagnosis` (Task 8): `t6-capstone`'s step 3 needs to read a
+ * `grant_type` field off a form-encoded (`application/x-www-form-urlencoded`) request
+ * body, which none of the declarative kinds can do (`reqJsonPath` only parses JSON). See
+ * that entry's own comment below for the full reasoning, including why the distinction it
+ * makes is load-bearing for hard constraint 9, not cosmetic.
+ *
  * `t3-redirect-progress` (Task 6 fix round, finding 1): `t3-redirect-mismatch`'s step 1
  * matches BOTH `GET` and `POST /google/o/oauth2/v2/auth`, because the wrong-URI failure
  * mode is a GET returning 400 (the consent page never renders at all, so there is no form
@@ -308,6 +314,47 @@ export const customAssertions: Record<string, CustomAssertion> = {
           reason: 'the consent POST did not come back with a code-bearing redirect (check that approve=1 was actually sent)',
         };
       }
+    }
+    return { pass: true };
+  },
+
+  /**
+   * `t6-refresh-grant-diagnosis` (Task 8, `t6-capstone` step 3: "confirm the refresh
+   * token from step 1 no longer works"). `POST /google/oauth2/token` is
+   * `application/x-www-form-urlencoded`, never JSON, so `reqJsonPath` (which only parses
+   * `ev.reqBody` as JSON, see the `reqJsonPath` case above) cannot read its `grant_type`
+   * field at all: it fails every request to this endpoint with "request body is not valid
+   * JSON," including the one the step actually wants to pass. This mock has no separate
+   * "read a form field from the request" declarative assertion kind, so this custom
+   * assertion parses the raw form-encoded body directly.
+   *
+   * Distinguishing on `grant_type` is load-bearing, not cosmetic (hard constraint 9): a
+   * learner who resends step 1's already-used `grant_type=authorization_code` request (or
+   * any other garbage code) ALSO gets `400 invalid_grant`, the byte-identical response
+   * shape `handleRefreshTokenGrant`'s own revoked-token branch produces. Without checking
+   * which grant type was actually attempted, that unrelated failure would silently and
+   * incorrectly satisfy this step without the learner ever having tested the refresh grant
+   * at all.
+   */
+  't6-refresh-grant-diagnosis': (ev) => {
+    const params = new URLSearchParams(ev.reqBody ?? '');
+    const grantType = params.get('grant_type');
+    if (grantType !== 'refresh_token') {
+      return {
+        pass: false,
+        reason: `this step wants a grant_type=refresh_token attempt, got grant_type=${grantType ?? '(none)'}`,
+      };
+    }
+    if (ev.status !== 400) {
+      return { pass: false, reason: `expected status 400 on the refresh attempt, got ${ev.status}` };
+    }
+    const parsed = parseJson(ev.resBody);
+    const errorField = parsed.ok ? (parsed.value as { error?: unknown } | null)?.error : undefined;
+    if (errorField !== 'invalid_grant') {
+      return {
+        pass: false,
+        reason: `expected error "invalid_grant" on the refresh attempt, got ${JSON.stringify(errorField)}`,
+      };
     }
     return { pass: true };
   },

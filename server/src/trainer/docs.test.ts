@@ -29,6 +29,12 @@ test('content/index.ts: listDocs returns the registered docs, github and google-
   assert.ok(ids.includes('google-oauth'));
   assert.ok(ids.includes('variables'));
   assert.ok(ids.includes('auth-methods'));
+  // Task 8: the implementation track is meant to be solvable from these three alone, so
+  // each one is a real, proven-present consumer of a registry entry, not just a file that
+  // happens to sit in content/docs/.
+  assert.ok(ids.includes('glean'));
+  assert.ok(ids.includes('slack'));
+  assert.ok(ids.includes('scripting'));
 });
 
 test('content/index.ts: getDoc reads real, non-stub markdown for every registered id', () => {

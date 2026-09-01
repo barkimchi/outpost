@@ -5,7 +5,7 @@ import type { Workspace } from '@gym/shared';
 import { defaultWorkspace } from '@gym/shared';
 import { VERSION, PORT, DATA_DIR } from '../config.js';
 import { engine, EngineError } from '../engine/engine.js';
-import { JsonStore } from '../engine/persist.js';
+import { JsonStore, progressStore } from '../engine/persist.js';
 import { proxyHandler } from './proxy.js';
 import { sseHandler } from './sse.js';
 import { getDocHandler, listDocsHandler } from './docs.js';
@@ -24,6 +24,19 @@ import { getDocHandler, listDocsHandler } from './docs.js';
  * Removed once that constraint lifted: `t1-content-type` now targets the real
  * `POST /github/user/repos` endpoint in `platforms/github/router.ts`, per spec section 5
  * ("paths under a platform base are byte-identical to the real product's").
+ *
+ * Task 8 adds `DELETE /api/progress` (below). `data/progress.json` accumulates a run/
+ * attempt/explanation entry from every verification pass performed while building this
+ * project, so the very first real, recorded rep would otherwise start against that
+ * residue. The explain-back writeups it holds are the most valuable thing this app
+ * stores and are not reconstructable, so this endpoint requires an explicit confirmation
+ * token in the body and is never called anywhere else in this codebase: not on startup
+ * (`server/src/index.ts` never touches it), not from any scenario flow, not from a test
+ * that merely wants a clean slate for ITSELF (every existing test already gets that for
+ * free via its own `createProgressStore(tmpPath)` / `Engine(registry, store)`, per
+ * `engine/persist.ts`'s own header comment; nothing needed a way to wipe the real file
+ * until a human explicitly wants one). See `router.test.ts` for the "a plain DELETE with
+ * no confirm token changes nothing on disk" regression test.
  */
 
 function sendEngineError(res: Response, err: unknown): void {
@@ -145,6 +158,34 @@ export function createTrainerRouter(): Router {
     } catch (err) {
       sendEngineError(res, err);
     }
+  });
+
+  // --- Progress reset (Task 8, confirm-style contract; see this file's header comment) ---
+
+  router.delete('/api/progress', (req, res) => {
+    const body = (req.body ?? {}) as { confirm?: unknown };
+    // A body key deliberately spelled out in full, not a bare boolean: "confirm: true" is
+    // one keystroke away from a copy-pasted test payload or a client bug that always sends
+    // truthy. Requiring the literal phrase is cheap, explicit insurance that whoever (or
+    // whatever) calls this meant it, matching this endpoint's whole reason for existing
+    // (never delete data/progress.json's explain-back history silently).
+    if (body.confirm !== 'RESET PROGRESS') {
+      res.status(400).json({
+        error: 'Bad Request',
+        message: 'resetting progress requires {"confirm":"RESET PROGRESS"} in the request body; nothing was changed',
+      });
+      return;
+    }
+    progressStore.update((current) => {
+      current.version = 1;
+      current.scenarios = {};
+    });
+    // Immediate write, not the usual 250ms debounce: this is a rare, deliberate action a
+    // human takes right before something that matters (recording the capstone demo per
+    // this task's brief), not a hot path, so there is no reason to leave a window where
+    // the in-memory state and data/progress.json on disk disagree.
+    progressStore.flush();
+    res.json({ ok: true });
   });
 
   // --- Docs (docs/SPEC.md section 10) ---
