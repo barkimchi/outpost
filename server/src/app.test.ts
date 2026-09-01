@@ -100,9 +100,16 @@ test('platform prefixes are guarded case-insensitively', async () => {
   const { server, port } = await listen(webDistDir);
   try {
     const res = await fetch(`http://127.0.0.1:${port}/GitHub/user`);
-    assert.equal(res.status, 404);
+    // Task 2 mounted a real /github router. Express's default mount-path matching is
+    // case-insensitive, so /GitHub/user resolves to that router's own GET /user handler
+    // and correctly 401s for a request with no Authorization header, rather than the
+    // generic 404 this test checked back when no router existed for the prefix yet. The
+    // assertion that actually matters is unchanged: this must never be the SPA shell.
+    assert.equal(res.status, 401);
     const contentType = res.headers.get('content-type') ?? '';
     assert.ok(contentType.includes('application/json'), '/GitHub/user should return JSON, not the SPA shell');
+    const text = await res.text();
+    assert.doesNotMatch(text, /<title>gym<\/title>/, '/GitHub/user must never be swallowed by the SPA shell');
   } finally {
     server.close();
   }

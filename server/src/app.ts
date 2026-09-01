@@ -6,6 +6,7 @@ import { rawBodyMiddlewares } from './middleware/rawBody.js';
 import { requestLog } from './middleware/requestLog.js';
 import { faultInjector } from './middleware/faultInjector.js';
 import { createTrainerRouter } from './trainer/router.js';
+import { createGithubRouter } from './platforms/github/router.js';
 
 /**
  * MOUNT ORDER LIVES HERE. This is the load-bearing part of the whole project
@@ -21,8 +22,8 @@ import { createTrainerRouter } from './trainer/router.js';
  *                        Stub until Task 3 wires the engine in.
  *   4. /_trainer         trainer router: health, proxy, SSE now; scenarios API, workspace,
  *                        docs, OAuth callback land here in later tasks.
- *   5. platform routers  /github /google /glean /slack (healthy behavior only). Lands in
- *                        Task 2; nothing mounted here yet.
+ *   5. platform routers  /github /google /glean /slack (healthy behavior only). /github
+ *                        lands in Task 2; /google /glean /slack are not mounted yet.
  *   6. static            web/dist + SPA fallback, PROD ONLY (spec section 6 step 6).
  *                        The platform-prefix guard runs before express.static, not after:
  *                        a request for /github/... etc. must never be answered by a
@@ -31,7 +32,8 @@ import { createTrainerRouter } from './trainer/router.js';
  *   7. 404 + error handler
  *
  * Task 0 wired step 4's health check (now moved into trainer/router.ts) and steps 6-7.
- * Task 1 (this revision) wires steps 1-4 for real and gates step 6 on production.
+ * Task 1 wired steps 1-4 for real and gated step 6 on production. Task 2 mounts /github
+ * in step 5.
  */
 
 const PLATFORM_PREFIXES = ['/github', '/google', '/glean', '/slack', '/_trainer'];
@@ -72,9 +74,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // --- 4. /_trainer ---
   app.use('/_trainer', createTrainerRouter());
 
-  // --- 5. platform routers (Task 2: /github /google /glean /slack) ---
-  // Nothing mounted here yet. Requests to these prefixes fall through to step 6's guard
-  // (which never serves them) and then to the 404 handler in step 7.
+  // --- 5. platform routers (/github now; /google /glean /slack land in later tasks) ---
+  app.use('/github', createGithubRouter());
+  // /google /glean /slack are not mounted yet: requests to those prefixes fall through
+  // to step 6's guard (which never serves them) and then to the 404 handler in step 7.
 
   // --- 6. static web/dist + SPA fallback (prod only) ---
   if (production) {
