@@ -140,7 +140,7 @@ postman-gym/
 
 | Base | Mirrors | Endpoints |
 |---|---|---|
-| `/github` | `https://api.github.com` | `GET /user`, `GET /user/repos`, `GET /repos/:owner/:repo`, `GET /orgs/:org/repos`, `GET /rate_limit` |
+| `/github` | `https://api.github.com` | `GET /user`, `GET /user/repos`, `POST /user/repos`, `GET /repos/:owner/:repo`, `GET /orgs/:org/repos`, `GET /notifications`, `GET /rate_limit` |
 | `/google` | Google OAuth + APIs | `GET /o/oauth2/v2/auth`, `POST /o/oauth2/v2/auth` (consent submit), `POST /oauth2/token`, `POST /oauth2/revoke`, `GET /oauth2/v3/userinfo`, `GET /calendar/v3/users/me/calendarList`, `GET /calendar/v3/calendars/:id/events` |
 | `/glean` | Glean public API | `POST /rest/api/v1/search`, `POST /rest/api/v1/chat`, `POST /api/index/v1/indexdocument`, `POST /api/index/v1/indexdocuments`, `GET /api/index/v1/getdocumentstatus` |
 | `/slack` | `https://slack.com` | `POST /api/auth.test`, `POST /api/chat.postMessage`, `GET /api/conversations.list`, `GET /api/conversations.history`, `POST /api/conversations.join`, `POST /webhook/events` (signature-verified) |
