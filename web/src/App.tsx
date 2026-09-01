@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { X } from 'lucide-react';
 import { useStore } from './state/store.js';
 import { ExerciseBar } from './components/ExerciseBar.js';
+import { Sidebar } from './components/postman/Sidebar.js';
 import { RequestBuilder } from './components/postman/RequestBuilder.js';
 import { ResponsePanel } from './components/postman/ResponsePanel.js';
 import { ReferencePanel } from './components/reference/ReferencePanel.js';
@@ -76,9 +77,12 @@ export default function App(): React.JSX.Element {
       >
         {!demoMode && (
           <>
-            <div className="flex min-h-0 min-w-0 flex-col border-r border-gym-border">
-              <RequestBuilder />
-              <ResponsePanel />
+            <div className="flex min-h-0 min-w-0 border-r border-gym-border">
+              <Sidebar />
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <RequestBuilder />
+                <ResponsePanel />
+              </div>
             </div>
             <div
               role="separator"

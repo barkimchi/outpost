@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
+import { Decoration, ViewPlugin } from '@codemirror/view';
+import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { json } from '@codemirror/lang-json';
 
 /**
@@ -38,9 +40,50 @@ const darkTheme = EditorView.theme(
     '.cm-cursor': { borderLeftColor: '#e0a12e' },
     '.cm-matchingBracket': { backgroundColor: 'rgba(224,161,46,0.2)', outline: 'none' },
     '.cm-foldGutter, .cm-lineNumbers': { color: '#5c6478' },
+    // {{var}} highlighting (docs/SPEC.md section 13: "highlighting in the URL, headers,
+    // and body"). Same resolved/unresolved color convention as `VarHighlightInput.tsx`'s
+    // URL-bar overlay: accent for a variable the active environment defines, red for one
+    // that would silently send its own literal `{{name}}` text if sent as-is.
+    '.cm-var-resolved': { backgroundColor: 'rgba(74,58,28,0.7)', color: '#f2c46b', borderRadius: '3px' },
+    '.cm-var-missing': { backgroundColor: 'rgba(74,34,38,0.7)', color: '#f0616a', borderRadius: '3px' },
   },
   { dark: true },
 );
+
+const VAR_PATTERN = /\{\{\s*([^{}]+?)\s*\}\}/g;
+
+function buildVarDecorations(view: EditorView, vars: Record<string, string>): DecorationSet {
+  const text = view.state.doc.toString();
+  const ranges: Array<{ from: number; to: number; resolved: boolean }> = [];
+  VAR_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = VAR_PATTERN.exec(text)) !== null) {
+    const name = (match[1] ?? '').trim();
+    ranges.push({ from: match.index, to: match.index + match[0].length, resolved: Object.prototype.hasOwnProperty.call(vars, name) });
+  }
+  return Decoration.set(
+    ranges.map((r) => Decoration.mark({ class: r.resolved ? 'cm-var-resolved' : 'cm-var-missing' }).range(r.from, r.to)),
+  );
+}
+
+/** A CodeMirror extension that decorates every `{{var}}` span in the document, colored by
+ *  whether `vars` (the active environment's flattened, enabled-only key/value map) defines
+ *  it. Rebuilt on every doc change; request bodies here are small enough that a full rescan
+ *  per edit is not a performance concern. */
+function varHighlightExtension(vars: Record<string, string>): Extension {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      constructor(view: EditorView) {
+        this.decorations = buildVarDecorations(view, vars);
+      }
+      update(update: ViewUpdate): void {
+        if (update.docChanged) this.decorations = buildVarDecorations(update.view, vars);
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+}
 
 export interface CodeMirrorBoxProps {
   value: string;
@@ -48,13 +91,20 @@ export interface CodeMirrorBoxProps {
   readOnly?: boolean;
   language?: 'json' | 'none';
   className?: string;
+  /** Enabled-only flattened environment variables (`lib/vars.ts`'s `flattenEnvVars`). When
+   *  provided, every `{{var}}` span in the document is highlighted, resolved vs missing.
+   *  Reconfigured in place via a `Compartment` when this changes (e.g. switching the active
+   *  environment), so it never resets the editor's undo history or cursor position the way
+   *  a full remount would. */
+  vars?: Record<string, string>;
 }
 
-export function CodeMirrorBox({ value, onChange, readOnly = false, language = 'none', className }: CodeMirrorBoxProps): React.JSX.Element {
+export function CodeMirrorBox({ value, onChange, readOnly = false, language = 'none', className, vars }: CodeMirrorBoxProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const varCompartmentRef = useRef<Compartment>(new Compartment());
 
   // (Re)create the view when the host mounts or when readOnly/language changes (rare,
   // e.g. switching Pretty<->Raw between json and plain). Value updates after mount are
@@ -63,7 +113,8 @@ export function CodeMirrorBox({ value, onChange, readOnly = false, language = 'n
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const extensions: Extension[] = [basicSetup, darkTheme, EditorView.lineWrapping];
+    const varCompartment = varCompartmentRef.current;
+    const extensions: Extension[] = [basicSetup, darkTheme, EditorView.lineWrapping, varCompartment.of(vars ? varHighlightExtension(vars) : [])];
     if (language === 'json') extensions.push(json());
     if (readOnly) {
       extensions.push(EditorState.readOnly.of(true), EditorView.editable.of(false));
@@ -81,8 +132,9 @@ export function CodeMirrorBox({ value, onChange, readOnly = false, language = 'n
       view.destroy();
       viewRef.current = null;
     };
-    // eslint: value intentionally excluded; see the sync effect below.
-    // (initial doc content is captured once at construction time)
+    // eslint: value intentionally excluded; see the sync effect below. `vars`'s initial
+    // value is captured here; subsequent changes are applied by the effect below via the
+    // compartment, without forcing this whole effect to rerun.
   }, [readOnly, language]); // eslint-disable-line react-hooks/exhaustive-deps -- see comment above
 
   useEffect(() => {
@@ -93,6 +145,14 @@ export function CodeMirrorBox({ value, onChange, readOnly = false, language = 'n
       view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
     }
   }, [value]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: varCompartmentRef.current.reconfigure(vars ? varHighlightExtension(vars) : []) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `vars` identity changes every
+    // resolution pass; reconfiguring on reference change (not deep-equality) is intended.
+  }, [vars]);
 
   return <div ref={hostRef} className={className} />;
 }

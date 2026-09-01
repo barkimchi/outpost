@@ -1,12 +1,22 @@
-/** Placeholder: Task 5 wires this to a CodeMirror editor persisted in `workspace.json`
- *  (docs/SPEC.md section 4). Styled consistently with the rest of the reference panel. */
+import { useStore } from '../../state/store.js';
+import { CodeMirrorBox } from '../CodeMirrorBox.js';
+
+/** A free-form notes editor (docs/SPEC.md section 13), persisted in `workspace.json` via
+ *  `state/store.ts`'s `setNotes` (debounced `PUT /_trainer/api/workspace`, the same path
+ *  every other workspace field saves through). Plain text/Markdown source, not rendered:
+ *  this is scratch space for the learner's own working notes, not another ticket display. */
 export function NotesTab(): React.JSX.Element {
+  const notes = useStore((s) => s.notes);
+  const setNotes = useStore((s) => s.setNotes);
+
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-      <span className="font-mono text-[10px] uppercase tracking-widest text-gym-text-faint">Coming soon</span>
-      <p className="max-w-xs text-xs leading-relaxed text-gym-text-dim">
-        A CodeMirror notes editor, persisted per workspace, lands here in a later task.
-      </p>
+    <div className="h-full p-3">
+      <CodeMirrorBox
+        value={notes}
+        onChange={setNotes}
+        language="none"
+        className="h-full overflow-auto rounded-md border border-gym-border bg-gym-panel2"
+      />
     </div>
   );
 }

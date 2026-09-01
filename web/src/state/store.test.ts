@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScenarioAttemptEvent, TrainerEvent } from '@gym/shared';
+import { defaultWorkspace } from '@gym/shared';
 import type { ActivatedPayload, EnginePublicState, HintResponse, ProxyResponseBody, ScenarioListEntry } from '../types.js';
 import { TrainerApiError } from '../types.js';
 
@@ -15,6 +16,10 @@ vi.mock('../api/client.js', () => ({
     revealSolution: vi.fn(),
     explain: vi.fn(),
     proxy: vi.fn(),
+    getWorkspace: vi.fn(),
+    putWorkspace: vi.fn(),
+    listDocs: vi.fn(),
+    getDoc: vi.fn(),
   },
 }));
 
@@ -32,6 +37,10 @@ const mocked = trainerApi as unknown as {
   revealSolution: ReturnType<typeof vi.fn>;
   explain: ReturnType<typeof vi.fn>;
   proxy: ReturnType<typeof vi.fn>;
+  getWorkspace: ReturnType<typeof vi.fn>;
+  putWorkspace: ReturnType<typeof vi.fn>;
+  listDocs: ReturnType<typeof vi.fn>;
+  getDoc: ReturnType<typeof vi.fn>;
 };
 
 const initialState = useStore.getState();
@@ -40,6 +49,11 @@ beforeEach(() => {
   window.localStorage.clear();
   useStore.setState(initialState, true);
   vi.clearAllMocks();
+  // Sane defaults so tests that call init() without caring about the workspace/docs
+  // hydration path do not have to mock every endpoint individually.
+  mocked.getWorkspace.mockResolvedValue(defaultWorkspace());
+  mocked.putWorkspace.mockResolvedValue({ ok: true });
+  mocked.listDocs.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -494,5 +508,268 @@ describe('store: scenario list refresh', () => {
     await useStore.getState().loadScenarios();
 
     expect(useStore.getState().scenarios).toEqual(list);
+  });
+});
+
+describe('store: {{var}} resolution on send', () => {
+  it('refuses to send and reports the specific undefined variable, never the literal token', async () => {
+    useStore.setState((s) => ({ request: { ...s.request, url: '{{baseUrl}}/user' } }));
+
+    await useStore.getState().sendRequest();
+
+    expect(mocked.proxy).not.toHaveBeenCalled();
+    expect(useStore.getState().errorMessage).toContain('{{baseUrl}}');
+  });
+
+  it('resolves {{var}} from the active environment and sends the real value', async () => {
+    const proxyResponse: ProxyResponseBody = { status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 };
+    mocked.proxy.mockResolvedValue(proxyResponse);
+    useStore.setState({
+      environments: [{ id: 'e1', name: 'Local', variables: [{ id: 'v1', key: 'baseUrl', value: 'http://127.0.0.1:4600/github', enabled: true }] }],
+      activeEnvironmentId: 'e1',
+    });
+    useStore.setState((s) => ({ request: { ...s.request, url: '{{baseUrl}}/user' } }));
+
+    await useStore.getState().sendRequest();
+
+    expect(mocked.proxy).toHaveBeenCalledWith(expect.objectContaining({ url: 'http://127.0.0.1:4600/github/user' }));
+    expect(useStore.getState().errorMessage).toBeNull();
+  });
+
+  it('a disabled environment variable does not resolve: sending is still refused', async () => {
+    useStore.setState({
+      environments: [{ id: 'e1', name: 'Local', variables: [{ id: 'v1', key: 'baseUrl', value: 'http://x', enabled: false }] }],
+      activeEnvironmentId: 'e1',
+    });
+    useStore.setState((s) => ({ request: { ...s.request, url: '{{baseUrl}}/user' } }));
+
+    await useStore.getState().sendRequest();
+
+    expect(mocked.proxy).not.toHaveBeenCalled();
+  });
+
+  it('injects the Auth tab Bearer token as a real Authorization header', async () => {
+    const proxyResponse: ProxyResponseBody = { status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 };
+    mocked.proxy.mockResolvedValue(proxyResponse);
+    useStore.setState((s) => ({
+      request: { ...s.request, url: 'http://x/y', auth: { ...s.request.auth, type: 'bearer', bearer: { token: 'abc123' } } },
+    }));
+
+    await useStore.getState().sendRequest();
+
+    expect(mocked.proxy).toHaveBeenCalledWith(expect.objectContaining({ headers: { Authorization: 'Bearer abc123' } }));
+  });
+});
+
+describe('store: collections', () => {
+  it('createCollection adds an empty collection', () => {
+    useStore.getState().createCollection('GitHub');
+    expect(useStore.getState().collections).toHaveLength(1);
+    expect(useStore.getState().collections[0]).toMatchObject({ name: 'GitHub', items: [] });
+  });
+
+  it('createRequestItem then loadRequestFromCollection loads it into the builder and links the draft', () => {
+    useStore.getState().createCollection('GitHub');
+    const collection = useStore.getState().collections[0];
+    if (!collection) throw new Error('unreachable');
+    useStore.getState().createRequestItem(collection.id, null, 'Get user');
+    const item = useStore.getState().collections[0]?.items[0];
+    if (!item) throw new Error('unreachable');
+
+    useStore.getState().loadRequestFromCollection(collection.id, item.id);
+
+    expect(useStore.getState().request.name).toBe('Get user');
+    expect(useStore.getState().draftLinkedTo).toEqual({ collectionId: collection.id, itemId: item.id });
+  });
+
+  it('saveCurrentRequest with no target updates the already-linked request in place', () => {
+    useStore.getState().createCollection('GitHub');
+    const collection = useStore.getState().collections[0];
+    if (!collection) throw new Error('unreachable');
+    useStore.getState().createRequestItem(collection.id, null, 'Get user');
+    const item = useStore.getState().collections[0]?.items[0];
+    if (!item) throw new Error('unreachable');
+    useStore.getState().loadRequestFromCollection(collection.id, item.id);
+
+    useStore.getState().setUrl('http://x/user');
+    useStore.getState().saveCurrentRequest();
+
+    const saved = useStore.getState().collections[0]?.items[0];
+    if (!saved || saved.kind !== 'request') throw new Error('unreachable');
+    expect(saved.request.url).toBe('http://x/user');
+  });
+
+  it('saveCurrentRequest with an explicit target creates a new item and links the draft to it', () => {
+    useStore.getState().createCollection('GitHub');
+    const collection = useStore.getState().collections[0];
+    if (!collection) throw new Error('unreachable');
+
+    useStore.getState().saveCurrentRequest({ collectionId: collection.id, parentFolderId: null, name: 'New save' });
+
+    expect(useStore.getState().collections[0]?.items).toHaveLength(1);
+    expect(useStore.getState().request.name).toBe('New save');
+    expect(useStore.getState().draftLinkedTo?.collectionId).toBe(collection.id);
+  });
+
+  it('deleteCollectionItem clears draftLinkedTo when the deleted item was the linked one', () => {
+    useStore.getState().createCollection('GitHub');
+    const collection = useStore.getState().collections[0];
+    if (!collection) throw new Error('unreachable');
+    useStore.getState().createRequestItem(collection.id, null, 'Get user');
+    const item = useStore.getState().collections[0]?.items[0];
+    if (!item) throw new Error('unreachable');
+    useStore.getState().loadRequestFromCollection(collection.id, item.id);
+
+    useStore.getState().deleteCollectionItem(collection.id, item.id);
+
+    expect(useStore.getState().draftLinkedTo).toBeNull();
+  });
+
+  it('createFolder then createRequestItem nests the request inside that folder, not the collection root', () => {
+    useStore.getState().createCollection('GitHub');
+    const collection = useStore.getState().collections[0];
+    if (!collection) throw new Error('unreachable');
+    useStore.getState().createFolder(collection.id, null, 'Auth');
+    const folder = useStore.getState().collections[0]?.items[0];
+    if (!folder || folder.kind !== 'folder') throw new Error('unreachable');
+
+    useStore.getState().createRequestItem(collection.id, folder.id, 'Token exchange');
+
+    const updatedFolder = useStore.getState().collections[0]?.items[0];
+    expect(updatedFolder?.kind === 'folder' ? updatedFolder.items : []).toHaveLength(1);
+    expect(useStore.getState().collections[0]?.items).toHaveLength(1); // still just the folder at root
+  });
+});
+
+describe('store: environments', () => {
+  it('createEnvironment adds one and, if none was active, makes it active', () => {
+    useStore.getState().createEnvironment('Local');
+    const env = useStore.getState().environments[0];
+    expect(env?.name).toBe('Local');
+    expect(useStore.getState().activeEnvironmentId).toBe(env?.id);
+  });
+
+  it('addEnvVariable/updateEnvVariable/removeEnvVariable mutate the right environment only', () => {
+    useStore.getState().createEnvironment('Local');
+    useStore.getState().createEnvironment('Prod');
+    const [local, prod] = useStore.getState().environments;
+    if (!local || !prod) throw new Error('unreachable');
+
+    useStore.getState().addEnvVariable(local.id);
+    const varRow = useStore.getState().environments.find((e) => e.id === local.id)?.variables[0];
+    if (!varRow) throw new Error('unreachable');
+    useStore.getState().updateEnvVariable(local.id, varRow.id, { key: 'baseUrl', value: 'http://127.0.0.1:4600' });
+
+    expect(useStore.getState().environments.find((e) => e.id === local.id)?.variables).toEqual([
+      { id: varRow.id, key: 'baseUrl', value: 'http://127.0.0.1:4600', enabled: true },
+    ]);
+    expect(useStore.getState().environments.find((e) => e.id === prod.id)?.variables).toEqual([]);
+
+    useStore.getState().removeEnvVariable(local.id, varRow.id);
+    expect(useStore.getState().environments.find((e) => e.id === local.id)?.variables).toEqual([]);
+  });
+
+  it('deleteEnvironment clears activeEnvironmentId only if the deleted one was active', () => {
+    useStore.getState().createEnvironment('Local');
+    const env = useStore.getState().environments[0];
+    if (!env) throw new Error('unreachable');
+
+    useStore.getState().deleteEnvironment(env.id);
+
+    expect(useStore.getState().environments).toEqual([]);
+    expect(useStore.getState().activeEnvironmentId).toBeNull();
+  });
+});
+
+describe('store: docs', () => {
+  it('loadDocs populates the doc list', async () => {
+    mocked.listDocs.mockResolvedValue([{ id: 'github', title: 'GitHub REST API', platform: 'github' }]);
+
+    await useStore.getState().loadDocs();
+
+    expect(useStore.getState().docs).toEqual([{ id: 'github', title: 'GitHub REST API', platform: 'github' }]);
+  });
+
+  it('selectDoc fetches the doc detail and a stale, slower response cannot clobber a faster later pick', async () => {
+    let resolveSlow: (v: { id: string; title: string; md: string }) => void = () => {};
+    const slow = new Promise<{ id: string; title: string; md: string }>((resolve) => {
+      resolveSlow = resolve;
+    });
+    mocked.getDoc.mockImplementation((id: string) => (id === 'slow' ? slow : Promise.resolve({ id, title: id, md: `# ${id}` })));
+
+    const slowPromise = useStore.getState().selectDoc('slow');
+    await useStore.getState().selectDoc('fast');
+    expect(useStore.getState().activeDoc?.id).toBe('fast');
+
+    resolveSlow({ id: 'slow', title: 'slow', md: '# slow' });
+    await slowPromise;
+
+    expect(useStore.getState().activeDoc?.id).toBe('fast');
+  });
+});
+
+describe('store: workspace persistence (GET/PUT /_trainer/api/workspace)', () => {
+  it('init() hydrates collections/environments/notes/draft from the server', async () => {
+    mocked.health.mockResolvedValue({ ok: true, version: '0.0.0', port: 4600 });
+    mocked.getState.mockResolvedValue({ state: 'idle' });
+    const ws = defaultWorkspace();
+    ws.notes = 'hello from disk';
+    ws.environments = [{ id: 'e1', name: 'Local', variables: [{ id: 'v1', key: 'baseUrl', value: 'http://x', enabled: true }] }];
+    ws.activeEnvironmentId = 'e1';
+    mocked.getWorkspace.mockResolvedValue(ws);
+
+    await useStore.getState().init();
+
+    expect(useStore.getState().notes).toBe('hello from disk');
+    expect(useStore.getState().environments).toEqual(ws.environments);
+    expect(useStore.getState().activeEnvironmentId).toBe('e1');
+    expect(useStore.getState().workspaceLoaded).toBe(true);
+  });
+
+  it('never saves before the workspace has loaded once, so it can never overwrite the server with default state', () => {
+    useStore.getState().setNotes('too early');
+    expect(mocked.putWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('a mutating action schedules a debounced PUT once the workspace has loaded', async () => {
+    vi.useFakeTimers();
+    try {
+      mocked.health.mockResolvedValue({ ok: true, version: '0.0.0', port: 4600 });
+      mocked.getState.mockResolvedValue({ state: 'idle' });
+      mocked.getWorkspace.mockResolvedValue(defaultWorkspace());
+
+      await useStore.getState().init();
+      useStore.getState().setNotes('scratch notes');
+      expect(mocked.putWorkspace).not.toHaveBeenCalled(); // debounced, not immediate
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(mocked.putWorkspace).toHaveBeenCalledTimes(1);
+      expect(mocked.putWorkspace.mock.calls[0]?.[0]).toMatchObject({ notes: 'scratch notes' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a fast burst of edits coalesces into a single PUT, not one per keystroke', async () => {
+    vi.useFakeTimers();
+    try {
+      mocked.health.mockResolvedValue({ ok: true, version: '0.0.0', port: 4600 });
+      mocked.getState.mockResolvedValue({ state: 'idle' });
+      mocked.getWorkspace.mockResolvedValue(defaultWorkspace());
+      await useStore.getState().init();
+
+      useStore.getState().setUrl('h');
+      useStore.getState().setUrl('ht');
+      useStore.getState().setUrl('htt');
+      useStore.getState().setUrl('http://x');
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(mocked.putWorkspace).toHaveBeenCalledTimes(1);
+      expect(mocked.putWorkspace.mock.calls[0]?.[0]).toMatchObject({ draft: expect.objectContaining({ url: 'http://x' }) });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

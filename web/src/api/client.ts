@@ -1,6 +1,8 @@
 import type {
   ActivatedPayload,
   ApiErrorBody,
+  DocDetail,
+  DocSummary,
   EnginePublicState,
   HealthResponse,
   HintResponse,
@@ -8,6 +10,7 @@ import type {
   ProxyResponseBody,
   ScenarioListEntry,
   SolutionResponse,
+  Workspace,
 } from '../types.js';
 import { TrainerApiError } from '../types.js';
 
@@ -59,4 +62,13 @@ export const trainerApi = {
 
   proxy: (body: ProxyRequestBody): Promise<ProxyResponseBody> =>
     request('/_trainer/api/proxy', { method: 'POST', body: JSON.stringify(body) }),
+
+  listDocs: (): Promise<DocSummary[]> => request('/_trainer/api/docs'),
+
+  getDoc: (id: string): Promise<DocDetail> => request(`/_trainer/api/docs/${encodeURIComponent(id)}`),
+
+  getWorkspace: (): Promise<Workspace> => request('/_trainer/api/workspace'),
+
+  putWorkspace: (workspace: Workspace): Promise<{ ok: true }> =>
+    request('/_trainer/api/workspace', { method: 'PUT', body: JSON.stringify(workspace) }),
 };

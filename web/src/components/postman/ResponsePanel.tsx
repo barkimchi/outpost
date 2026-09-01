@@ -8,7 +8,24 @@ const TABS: Array<{ id: ResponseViewMode; label: string }> = [
   { id: 'pretty', label: 'Pretty' },
   { id: 'raw', label: 'Raw' },
   { id: 'headers', label: 'Headers' },
+  { id: 'test-results', label: 'Test Results' },
+  { id: 'console', label: 'Console' },
 ];
+
+/** Task 9 (spec section 14) wires these to the script engine's `testResults`/
+ *  `consoleLines`. This task builds the tab slot only, so that wiring is an extension. */
+function ScriptResultPlaceholder({ kind }: { kind: 'test-results' | 'console' }): React.JSX.Element {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center">
+      <span className="font-mono text-[10px] uppercase tracking-widest text-gym-text-faint">No scripts run yet</span>
+      <p className="max-w-xs text-xs leading-relaxed text-gym-text-dim">
+        {kind === 'test-results'
+          ? 'Pass/fail rows from the Tests tab script land here once the script engine lands.'
+          : 'console.log output from Pre-request and Tests scripts lands here once the script engine lands.'}
+      </p>
+    </div>
+  );
+}
 
 /**
  * Attempt feedback (docs/SPEC.md hard constraint 9: "Attempt feedback always says why it
@@ -101,6 +118,8 @@ export function ResponsePanel(): React.JSX.Element {
                   ))}
                 </tbody>
               </table>
+            ) : mode === 'test-results' || mode === 'console' ? (
+              <ScriptResultPlaceholder kind={mode} />
             ) : (
               <CodeMirrorBox
                 value={mode === 'pretty' ? tryPrettyJson(response.body).pretty : response.body}
