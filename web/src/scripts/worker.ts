@@ -31,25 +31,95 @@ import cryptoJsSource from 'crypto-js/crypto-js.js?raw';
 
 /** No DOM, no `window`: true for free inside any Worker. "No fetch, no network reachable"
  *  is NOT free: a dedicated Worker has a real, live `fetch`, `XMLHttpRequest`, `WebSocket`,
- *  `EventSource`, `importScripts` (which can itself load a remote script), and
- *  `navigator.sendBeacon`. Overwriting every one of them with a function that throws a
- *  named, readable error is the entire sandbox; there is no further hardening (a
- *  determined script can still burn CPU or memory, which is what the 2000ms hard timeout
- *  in `run.ts` is for). That is enough for a training tool a learner runs against
- *  themselves, not a boundary meant to withstand a hostile third party. */
+ *  `EventSource`, `importScripts` (which can itself load a remote script), `caches`,
+ *  `indexedDB`, `WebTransport`, `BroadcastChannel`, `RTCPeerConnection`, and
+ *  `navigator.sendBeacon`.
+ *
+ *  Fix round (coordinator review): an earlier version of this file shadowed these with an
+ *  OWN property on `self` (`self.fetch = blocked()`). That is not enough. `fetch`,
+ *  `importScripts`, `caches`, and `indexedDB` are exposed via a shared prototype in the
+ *  chain (the `WindowOrWorkerGlobalScope` mixin, a real JS prototype object in Chromium,
+ *  not merely a spec fiction), so `Object.getPrototypeOf(self).fetch` still resolves to the
+ *  ORIGINAL implementation; calling it as `Object.getPrototypeOf(self).fetch.call(self,
+ *  url)` re-binds `this` to `self` and walks straight past an own-property shadow to
+ *  perform a real fetch. Proven against the real production string at the app's own
+ *  origin: that exact call, `caches.open(x).then(c => c.add(url))` (not touched by the
+ *  own-property fix at all), and `Object.getPrototypeOf(self).importScripts.call(self,
+ *  url)` all reached the network. `indexedDB` being unblocked additionally broke the
+ *  DIFFERENT, non-security guarantee spec section 14 makes ("a fresh worker per execution,
+ *  so no state leaks between runs"): IndexedDB is a persistent, origin-scoped store, so a
+ *  value written by run 1's script was readable from run 2's genuinely fresh Worker, even
+ *  though every JS variable in that fresh worker started from zero.
+ *
+ *  The fix walks the ENTIRE prototype chain and replaces the named property at every
+ *  level that has it as an OWN property (deleting first, then redefining, so a later
+ *  lookup can never fall through to a level this loop skipped), not just on `self` itself.
+ *  This runs synchronously, at the very top of this worker's source, before `self.onmessage`
+ *  is even defined below, so no script this worker ever runs, not even the first one,
+ *  observes the unblocked original.
+ *
+ *  This is still not a hardened sandbox against a truly hostile script: CPU-bound and
+ *  memory-bound denial of service (an infinite loop, or an unbounded allocation loop) are
+ *  handled differently, if at all (`run.ts`'s 2000ms `terminate()` stops the former; there
+ *  is no reliable browser-level defense against the latter before a real OOM crash, and
+ *  `content/docs/scripting.md` says so plainly rather than implying a guarantee that does
+ *  not exist). This fix closes the specific, proven network/storage escape; it is not a
+ *  claim that no other escape could ever exist. */
 const NETWORK_SANDBOX_SOURCE = `
-function __pmBlocked(name) {
-  return function () {
-    throw new Error('"' + name + '" is not available in a Postman Gym script: scripts run in a network-isolated worker (see the Scripting doc).');
-  };
+function __pmBlockedMessage(name) {
+  return '"' + name + '" is not available in a Postman Gym script: scripts run in a network-isolated worker (see the Scripting doc).';
 }
-try { self.fetch = __pmBlocked('fetch'); } catch (e) {}
-try { self.XMLHttpRequest = __pmBlocked('XMLHttpRequest'); } catch (e) {}
-try { self.WebSocket = __pmBlocked('WebSocket'); } catch (e) {}
-try { self.EventSource = __pmBlocked('EventSource'); } catch (e) {}
-try { self.importScripts = __pmBlocked('importScripts'); } catch (e) {}
-try { if (typeof self.Worker !== 'undefined') self.Worker = __pmBlocked('Worker'); } catch (e) {}
-try { if (self.navigator) self.navigator.sendBeacon = __pmBlocked('navigator.sendBeacon'); } catch (e) {}
+function __pmBlockedFn(name) {
+  return function () { throw new Error(__pmBlockedMessage(name)); };
+}
+function __pmBlockedObj(name) {
+  var msg = __pmBlockedMessage(name);
+  if (typeof Proxy === 'undefined') return __pmBlockedFn(name);
+  return new Proxy({}, {
+    get: function () { throw new Error(msg); },
+    apply: function () { throw new Error(msg); },
+    construct: function () { throw new Error(msg); }
+  });
+}
+
+/* Replaces the own property "name" with "replacement" at EVERY level of obj's prototype
+   chain that currently defines it, then guarantees obj itself ends up with it as an own
+   property too, even if nothing in the chain matched. See the file-level comment above for
+   why a single "self.NAME = blocked" assignment is not sufficient. */
+function __pmNuke(obj, name, replacement) {
+  var cur = obj;
+  while (cur) {
+    if (Object.prototype.hasOwnProperty.call(cur, name)) {
+      try { delete cur[name]; } catch (e) {}
+      try {
+        Object.defineProperty(cur, name, { value: replacement, writable: true, configurable: true, enumerable: false });
+      } catch (e) {
+        try { cur[name] = replacement; } catch (e2) {}
+      }
+    }
+    cur = Object.getPrototypeOf(cur);
+  }
+  try {
+    Object.defineProperty(obj, name, { value: replacement, writable: true, configurable: true, enumerable: false });
+  } catch (e) {
+    try { obj[name] = replacement; } catch (e2) {}
+  }
+}
+
+var __pmFnBlocklist = [
+  'fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'importScripts', 'Worker',
+  'WebTransport', 'BroadcastChannel', 'RTCPeerConnection'
+];
+for (var __pmI = 0; __pmI < __pmFnBlocklist.length; __pmI++) {
+  try { __pmNuke(self, __pmFnBlocklist[__pmI], __pmBlockedFn(__pmFnBlocklist[__pmI])); } catch (e) {}
+}
+var __pmObjBlocklist = ['caches', 'indexedDB'];
+for (var __pmJ = 0; __pmJ < __pmObjBlocklist.length; __pmJ++) {
+  try { __pmNuke(self, __pmObjBlocklist[__pmJ], __pmBlockedObj(__pmObjBlocklist[__pmJ])); } catch (e) {}
+}
+try {
+  if (self.navigator) __pmNuke(self.navigator, 'sendBeacon', __pmBlockedFn('navigator.sendBeacon'));
+} catch (e) {}
 `;
 
 /** The `pm` API shim (spec section 14's exact surface) plus the message handler that runs

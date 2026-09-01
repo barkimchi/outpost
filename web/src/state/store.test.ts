@@ -696,6 +696,94 @@ describe('store: script engine pipeline (docs/SPEC.md section 14)', () => {
     expect(useStore.getState().testResults).toEqual([]);
     expect(useStore.getState().consoleLines).toEqual([]);
   });
+
+  /** Fix round (coordinator review, finding 6 / constraint 7b): a `pm.test(...)` call
+   *  inside a Pre-request script used to run for real and have its result thrown away;
+   *  only `preResult.error` was ever read. Now wired into `testResults` the same as a
+   *  Tests-script row. */
+  it('pm.test rows from the Pre-request script are wired into testResults, not silently dropped', async () => {
+    mocked.proxy.mockResolvedValue({ status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    useStore.setState((s) => ({
+      request: { ...s.request, url: 'http://x/y', scripts: { ...s.request.scripts, preRequest: 'pm.test("pre-check", () => {});' } },
+    }));
+    mockedRunScript.mockResolvedValueOnce({ testResults: [{ name: 'pre-check', passed: true }], envPatch: {}, consoleLines: [], error: null });
+
+    await useStore.getState().sendRequest();
+
+    expect(useStore.getState().testResults).toEqual([{ name: 'pre-check', passed: true }]);
+  });
+});
+
+/**
+ * Fix round (coordinator review, finding 5): `CodeExportModal` used to call
+ * `buildResolvedRequest` directly, skipping the Pre-request script entirely, so a script
+ * setting `{{sig}}` made Send succeed while the export either refused with "Undefined
+ * variable" or showed a stale value. `resolveRequestForExport` routes through the exact
+ * same `runPreRequestScript` helper `sendRequest` uses, which these tests verify directly
+ * against the store (the component-level behavior is `CodeExportModal`'s own concern).
+ */
+describe('store: resolveRequestForExport (finding 5, coordinator review)', () => {
+  it('runs the Pre-request script, applies its envPatch, and resolves {{vars}} against the result', async () => {
+    useStore.setState({ environments: [{ id: 'e1', name: 'Local', variables: [] }], activeEnvironmentId: 'e1' });
+    useStore.setState((s) => ({
+      request: {
+        ...s.request,
+        url: 'http://x/y',
+        headers: [{ id: 'h1', key: 'X-Sig', value: '{{sig}}', enabled: true }],
+        scripts: { ...s.request.scripts, preRequest: 'pm.environment.set("sig", "computed");' },
+      },
+    }));
+    mockedRunScript.mockResolvedValueOnce({ testResults: [], envPatch: { sig: 'computed' }, consoleLines: [], error: null });
+
+    const { resolved, scriptError } = await useStore.getState().resolveRequestForExport();
+
+    expect(resolved.headers).toEqual({ 'X-Sig': 'computed' });
+    expect(resolved.missing).toEqual([]);
+    expect(scriptError).toBeNull();
+    // Durably visible afterward, exactly like Send leaves it (same helper, same side effect).
+    expect(useStore.getState().environments[0]?.variables).toContainEqual(expect.objectContaining({ key: 'sig', value: 'computed' }));
+  });
+
+  it('surfaces a Pre-request script error as scriptError, without throwing', async () => {
+    useStore.setState((s) => ({
+      request: { ...s.request, url: 'http://x/y', scripts: { ...s.request.scripts, preRequest: 'bad script (((' } },
+    }));
+    mockedRunScript.mockResolvedValueOnce({ testResults: [], envPatch: {}, consoleLines: [], error: 'SyntaxError: boom' });
+
+    const { scriptError } = await useStore.getState().resolveRequestForExport();
+
+    expect(scriptError).toBe('SyntaxError: boom');
+  });
+
+  it('does not run any script when the request has no Pre-request script', async () => {
+    useStore.setState((s) => ({ request: { ...s.request, url: 'http://x/y' } }));
+
+    const { resolved } = await useStore.getState().resolveRequestForExport();
+
+    expect(mockedRunScript).not.toHaveBeenCalled();
+    expect(resolved.url).toBe('http://x/y');
+  });
+
+  it('resolves the SAME header value Send actually sent, from the same Pre-request script: no divergence', async () => {
+    mocked.proxy.mockResolvedValue({ status: 200, headers: {}, body: '{}', timeMs: 1, sizeBytes: 2 });
+    useStore.setState((s) => ({
+      request: {
+        ...s.request,
+        url: 'http://x/y',
+        headers: [{ id: 'h1', key: 'X-Sig', value: '{{sig}}', enabled: true }],
+        scripts: { ...s.request.scripts, preRequest: 'pm.environment.set("sig", "same-value");' },
+      },
+    }));
+    mockedRunScript.mockResolvedValue({ testResults: [], envPatch: { sig: 'same-value' }, consoleLines: [], error: null });
+
+    await useStore.getState().sendRequest();
+    const sentCall = mocked.proxy.mock.calls[0]?.[0] as { headers: Record<string, string> } | undefined;
+
+    const exportResult = await useStore.getState().resolveRequestForExport();
+
+    expect(exportResult.resolved.headers).toEqual(sentCall?.headers);
+    expect(exportResult.resolved.headers).toEqual({ 'X-Sig': 'same-value' });
+  });
 });
 
 describe('store: collections', () => {

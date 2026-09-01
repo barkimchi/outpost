@@ -93,4 +93,57 @@ describe('runScript', () => {
     expect(fakeWorker.onmessage).toBeNull();
     expect(timeoutResult.error).toMatch(/timed out/i);
   });
+
+  /**
+   * Fix round (coordinator review, finding 2): `postMessage` is a legitimate channel a
+   * learner's own script can call directly (it is how the worker reports its real result),
+   * so a script doing `self.postMessage({})` mid-run used to resolve `runScript` with
+   * `ev.data` cast straight to `ScriptRunResult` with no validation. `state/store.ts`'s
+   * `sendRequest` then did `consoleLines.push(...result.consoleLines)` on `undefined`,
+   * threw `TypeError: consoleLines is not iterable`, and the throw escaped before
+   * `set({ sending: false })` ever ran: Send stayed disabled until a page reload, directly
+   * contradicting spec section 14's "never a hung UI". These tests drive the exact
+   * malformed shapes a careless or adversarial script could send and confirm `runScript`
+   * resolves (never throws, never hangs) with a failed-run result instead.
+   */
+  describe('malformed worker messages (finding 2)', () => {
+    it('an empty object resolves as a failed run, not a thrown exception', async () => {
+      const promise = runScript('self.postMessage({});', baseContext);
+      fakeWorker.onmessage?.({ data: {} } as MessageEvent);
+      const result = await promise;
+      expect(result.error).toMatch(/unexpected result shape/i);
+      expect(result.testResults).toEqual([]);
+      expect(result.consoleLines).toEqual([]);
+      expect(fakeWorker.terminate).toHaveBeenCalledTimes(1);
+    });
+
+    it('null resolves as a failed run', async () => {
+      const promise = runScript('self.postMessage(null);', baseContext);
+      fakeWorker.onmessage?.({ data: null } as MessageEvent);
+      const result = await promise;
+      expect(result.error).toMatch(/unexpected result shape/i);
+    });
+
+    it('a testResults entry missing "passed" resolves as a failed run', async () => {
+      const promise = runScript('x', baseContext);
+      fakeWorker.onmessage?.({ data: { testResults: [{ name: 'x' }], envPatch: {}, consoleLines: [], error: null } } as MessageEvent);
+      const result = await promise;
+      expect(result.error).toMatch(/unexpected result shape/i);
+    });
+
+    it('an envPatch value that is neither a string nor null resolves as a failed run', async () => {
+      const promise = runScript('x', baseContext);
+      fakeWorker.onmessage?.({ data: { testResults: [], envPatch: { sig: 42 }, consoleLines: [], error: null } } as unknown as MessageEvent);
+      const result = await promise;
+      expect(result.error).toMatch(/unexpected result shape/i);
+    });
+
+    it('a well-formed result still resolves normally (the validator does not reject valid shapes)', async () => {
+      const promise = runScript('x', baseContext);
+      const good = { testResults: [{ name: 'ok', passed: true }], envPatch: { a: 'b', c: null }, consoleLines: ['hi'], error: null };
+      fakeWorker.onmessage?.({ data: good } as MessageEvent);
+      const result = await promise;
+      expect(result).toEqual(good);
+    });
+  });
 });

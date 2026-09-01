@@ -25,6 +25,7 @@ import type { SSEConnectionStatus } from '../api/sse.js';
 import { loadPersistedUi, savePersistedUi } from './persistence.js';
 import { TrainerApiError } from '../types.js';
 import { buildResolvedRequest } from '../lib/buildRequest.js';
+import type { ResolvedRequest } from '../lib/buildRequest.js';
 import { flattenEnvVars } from '../lib/vars.js';
 import { statusText } from '../lib/format.js';
 import { runScript } from '../scripts/run.js';
@@ -60,9 +61,13 @@ import {
 
 const MAX_LOGS = 1000;
 
+/** Fix round (coordinator review, minor): `ScenarioAttemptEvent.attemptHint` is a real,
+ *  typed optional field on the interface now (it was not when this function was first
+ *  written), so the intersection-cast that used to be needed to read it is dead weight.
+ *  The "not an empty string" normalization is still real behavior worth keeping: an empty
+ *  hint means the same thing to a caller as no hint at all. */
 function readAttemptHint(event: ScenarioAttemptEvent): string | undefined {
-  const hint = (event as ScenarioAttemptEvent & { attemptHint?: unknown }).attemptHint;
-  return typeof hint === 'string' && hint !== '' ? hint : undefined;
+  return event.attemptHint !== undefined && event.attemptHint !== '' ? event.attemptHint : undefined;
 }
 
 export interface StepChip {
@@ -182,6 +187,7 @@ export interface StoreState {
   setScriptPreRequest: (value: string) => void;
   setScriptTest: (value: string) => void;
   sendRequest: () => Promise<void>;
+  resolveRequestForExport: () => Promise<{ resolved: ResolvedRequest; scriptError: string | null }>;
   newRequestDraft: () => void;
 
   // --- Collections ------------------------------------------------------------------
@@ -380,6 +386,61 @@ export const useStore = create<StoreState>((set, get) => {
     set({ environments });
     scheduleWorkspaceSave();
     return activeVarsFromState({ environments, activeEnvironmentId: envId });
+  }
+
+  /**
+   * Runs `request`'s Pre-request script (if any) and applies its `envPatch`, returning the
+   * vars map `{{var}}` resolution should use afterward, plus whatever the script logged or
+   * asserted along the way.
+   *
+   * Fix round (coordinator review, finding 5): `CodeExportModal` used to call
+   * `buildResolvedRequest` directly, which never runs the Pre-request script at all. With a
+   * script doing `pm.environment.set("sig", ...)`, Send genuinely resolved and sent the
+   * real header, but the export panel either refused with "Undefined variable: {{sig}}" (no
+   * active environment yet holding that key) or showed a stale value from whatever the
+   * PREVIOUS send happened to leave in the environment. Task 5 centralized `{{var}}`
+   * resolution into one function specifically so Send and the export could never diverge;
+   * skipping the script for one of the two callers reopened exactly that gap one step
+   * earlier in the pipeline. Routing both `sendRequest` and the new
+   * `resolveRequestForExport` through this single function makes the divergence impossible
+   * by construction: there is only one place a Pre-request script ever runs, and both
+   * callers call it the same way, with the same environment-mutation side effect.
+   */
+  async function runPreRequestScript(request: SavedRequest, initialVars: Record<string, string>): Promise<{
+    vars: Record<string, string>;
+    testResults: TestResult[];
+    consoleLines: string[];
+    error: string | null;
+  }> {
+    let vars = initialVars;
+    const testResults: TestResult[] = [];
+    const consoleLines: string[] = [];
+    let error: string | null = null;
+
+    if (request.scripts.preRequest.trim() !== '') {
+      // Best-effort resolution against the CURRENT environment, purely to give the script
+      // something meaningful to read via `pm.request`; `missing` is not checked here; the
+      // real, load-bearing missing-variable check happens once, in the caller, against the
+      // environment as the script actually left it.
+      const preview = buildResolvedRequest(request, vars);
+      const preResult = await runScript(request.scripts.preRequest, {
+        environment: vars,
+        request: { method: preview.method, url: preview.url, headers: preview.headers, body: preview.body },
+      });
+      consoleLines.push(...preResult.consoleLines);
+      // Fix round, finding 6 (constraint 7b: a produced field with no consumer): a
+      // `pm.test(...)` call inside a Pre-request script used to be run for real, its
+      // result thrown away, and only `preResult.error` ever read. Wired in here so it
+      // shows up in Test Results and counts toward the badge, same as a Tests-script row.
+      testResults.push(...preResult.testResults);
+      if (Object.keys(preResult.envPatch).length > 0) vars = applyEnvPatchToActiveEnvironment(preResult.envPatch);
+      if (preResult.error) {
+        error = preResult.error;
+        testResults.push({ name: 'Pre-request script', passed: false, error: preResult.error });
+      }
+    }
+
+    return { vars, testResults, consoleLines, error };
   }
 
   return {
@@ -711,29 +772,15 @@ export const useStore = create<StoreState>((set, get) => {
       }
 
       set({ sending: true, errorMessage: null, testResults: [], consoleLines: [] });
-      const consoleLines: string[] = [];
-      const testResults: TestResult[] = [];
 
       // Pipeline order (docs/SPEC.md section 14, this task's brief): pre-request script,
-      // apply envPatch, resolve {{vars}}, proxy call, response, tests script. `vars` is
-      // reassigned after the pre-request script runs so resolution below sees whatever it
-      // wrote (e.g. a computed HMAC signature), not the environment as it stood before.
-      let vars = activeVarsFromState(get());
-
-      if (request.scripts.preRequest.trim() !== '') {
-        // Best-effort resolution against the CURRENT environment, purely to give the
-        // script something meaningful to read via `pm.request`; `missing` is not checked
-        // here; the real, load-bearing missing-variable check happens once, below, against
-        // the environment as the pre-request script actually left it.
-        const preview = buildResolvedRequest(request, vars);
-        const preResult = await runScript(request.scripts.preRequest, {
-          environment: vars,
-          request: { method: preview.method, url: preview.url, headers: preview.headers, body: preview.body },
-        });
-        consoleLines.push(...preResult.consoleLines);
-        if (Object.keys(preResult.envPatch).length > 0) vars = applyEnvPatchToActiveEnvironment(preResult.envPatch);
-        if (preResult.error) testResults.push({ name: 'Pre-request script', passed: false, error: preResult.error });
-      }
+      // apply envPatch, resolve {{vars}}, proxy call, response, tests script.
+      // `runPreRequestScript` is the SAME function `resolveRequestForExport` calls below,
+      // so Send and `</> Code` can never resolve a Pre-request script differently.
+      const pre = await runPreRequestScript(request, activeVarsFromState(get()));
+      const vars = pre.vars;
+      const consoleLines = pre.consoleLines;
+      const testResults = pre.testResults;
 
       const resolved = buildResolvedRequest(request, vars);
 
@@ -795,6 +842,21 @@ export const useStore = create<StoreState>((set, get) => {
       }
 
       set({ sending: false, testResults, consoleLines });
+    },
+
+    /**
+     * Fix round (coordinator review, finding 5): what `CodeExportModal` calls instead of
+     * `buildResolvedRequest` directly, so the exported cURL/Python/Node snippet reflects a
+     * Pre-request script's effect exactly the way Send does, through the same
+     * `runPreRequestScript` helper. Returns `scriptError` (not thrown) so the modal can
+     * show it as a warning without special-casing a rejected promise; `resolved.missing`
+     * still drives the existing "Undefined variable" state for anything the script did not
+     * resolve.
+     */
+    async resolveRequestForExport() {
+      const request = get().request;
+      const pre = await runPreRequestScript(request, activeVarsFromState(get()));
+      return { resolved: buildResolvedRequest(request, pre.vars), scriptError: pre.error };
     },
 
     // --- Collections --------------------------------------------------------------------

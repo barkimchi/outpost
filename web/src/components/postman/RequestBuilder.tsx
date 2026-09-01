@@ -123,7 +123,8 @@ function ScriptTab({ value, onChange, kind }: { value: string; onChange: (v: str
       <p className="mb-2 shrink-0 rounded-md border border-gym-border bg-gym-panel2/60 px-2.5 py-1.5 text-[11px] leading-relaxed text-gym-text-faint">
         {kind === 'preRequest'
           ? 'Runs before the request is sent. pm.environment.set/unset here changes what {{vars}} resolve to for this send. No fetch, no network: pm.sendRequest is not implemented.'
-          : 'Runs after the response arrives, with pm.response populated. pm.test(name, fn) rows show up in Test Results; console.log output shows up in Console.'}
+          : 'Runs after the response arrives, with pm.response populated. pm.test(name, fn) rows show up in Test Results; console.log output shows up in Console.'}{' '}
+        A script stuck in a loop is stopped at 2 seconds; a script that allocates memory in a loop is not, and can crash the tab.
       </p>
       <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-gym-border bg-gym-panel2">
         <CodeMirrorBox value={value} onChange={onChange} language="javascript" className="h-full" />

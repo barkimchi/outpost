@@ -1,18 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import type { CodeExportLanguage } from '../../lib/codeExport.js';
 import { generateCode } from '../../lib/codeExport.js';
-import { buildResolvedRequest } from '../../lib/buildRequest.js';
-import { useActiveVars, useStore } from '../../state/store.js';
+import type { ResolvedRequest } from '../../lib/buildRequest.js';
+import { useStore } from '../../state/store.js';
 import { CodeMirrorBox } from '../CodeMirrorBox.js';
 import { Modal } from '../Modal.js';
 
 /**
- * `</> Code` export (docs/SPEC.md section 13): cURL, Python `requests`, Node `axios`. Uses
- * the exact same `buildResolvedRequest` the Send button uses, so this is never decorative:
- * what it shows is byte-for-byte what Send would actually put on the wire (this task's
- * dispatch: verified by piping the generated cURL into a shell and getting the same
- * status Send got).
+ * `</> Code` export (docs/SPEC.md section 13): cURL, Python `requests`, Node `axios`.
+ *
+ * Fix round (coordinator review, finding 5): this used to call `buildResolvedRequest`
+ * directly, which skips the Pre-request script entirely. A script doing
+ * `pm.environment.set("sig", ...)` made Send genuinely resolve and send the real header
+ * while this modal either refused with "Undefined variable: {{sig}}" (nothing had set it
+ * yet in this view's eyes) or showed whatever the PREVIOUS send happened to leave in the
+ * environment: two different requests behind one claimed-identical export. Task 5
+ * centralized `{{var}}` resolution into `buildResolvedRequest` specifically so Send and
+ * this export could never diverge; the fix is to run through `state/store.ts`'s
+ * `resolveRequestForExport`, which calls the exact same `runPreRequestScript` helper
+ * `sendRequest` calls, so there is only one place a Pre-request script ever runs and both
+ * callers reach it the same way. That makes this async (running a script can take up to
+ * 2000ms), where the old version was a synchronous render-time computation.
  */
 
 const LANGUAGES: Array<{ id: CodeExportLanguage; label: string }> = [
@@ -22,14 +31,33 @@ const LANGUAGES: Array<{ id: CodeExportLanguage; label: string }> = [
 ];
 
 export function CodeExportModal({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const request = useStore((s) => s.request);
-  const vars = useActiveVars();
+  const resolveRequestForExport = useStore((s) => s.resolveRequestForExport);
   const [language, setLanguage] = useState<CodeExportLanguage>('curl');
   const [copied, setCopied] = useState(false);
+  const [resolving, setResolving] = useState(true);
+  const [resolved, setResolved] = useState<ResolvedRequest | null>(null);
+  const [scriptError, setScriptError] = useState<string | null>(null);
 
-  const resolved = buildResolvedRequest(request, vars);
-  const hasMissing = resolved.missing.length > 0;
-  const code = hasMissing ? '' : generateCode(language, resolved);
+  // Runs once per modal open, not on every render: a Pre-request script that mutates the
+  // environment (or simply takes noticeable time) should not silently re-run on an
+  // unrelated re-render, e.g. a language tab switch.
+  useEffect(() => {
+    let cancelled = false;
+    setResolving(true);
+    void resolveRequestForExport().then((result) => {
+      if (cancelled) return;
+      setResolved(result.resolved);
+      setScriptError(result.scriptError);
+      setResolving(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately mount-only, see comment above.
+  }, []);
+
+  const hasMissing = (resolved?.missing.length ?? 0) > 0;
+  const code = resolved && !hasMissing ? generateCode(language, resolved) : '';
 
   async function handleCopy(): Promise<void> {
     try {
@@ -59,7 +87,7 @@ export function CodeExportModal({ onClose }: { onClose: () => void }): React.JSX
               </button>
             ))}
           </div>
-          {!hasMissing && (
+          {!resolving && !hasMissing && (
             <button
               type="button"
               onClick={() => void handleCopy()}
@@ -71,7 +99,18 @@ export function CodeExportModal({ onClose }: { onClose: () => void }): React.JSX
           )}
         </div>
 
-        {hasMissing ? (
+        {scriptError && (
+          <p className="mb-3 shrink-0 rounded-md border border-gym-red-dim bg-gym-red-dim/15 px-3 py-2 text-xs leading-relaxed text-gym-red">
+            <span className="font-semibold">Pre-request script error.</span> {scriptError} The code below reflects the request as
+            far as resolution got.
+          </p>
+        )}
+
+        {resolving ? (
+          <div className="flex flex-1 items-center justify-center text-xs text-gym-text-faint">
+            Running the Pre-request script.
+          </div>
+        ) : hasMissing && resolved ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-md border border-gym-amber-dim bg-gym-amber-dim/15 px-6 text-center">
             <p className="text-xs font-semibold text-gym-amber">
               Undefined variable{resolved.missing.length > 1 ? 's' : ''}: {resolved.missing.map((n) => `{{${n}}}`).join(', ')}

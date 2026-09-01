@@ -154,38 +154,81 @@ function ResponseTabs(): React.JSX.Element {
   );
 }
 
+/** Shown in Pretty/Raw/Headers when there is no real HTTP response to display them for
+ *  (the request either failed before it was ever sent, or was never sent at all), but the
+ *  tab strip itself is still visible because Test Results or Console has something to
+ *  show. Points the learner at the tab that actually explains what happened, rather than
+ *  a blank pane. */
+function NoResponseView({ reason }: { reason: string }): React.JSX.Element {
+  return (
+    <div className="flex h-full items-center justify-center px-6 text-center text-xs text-gym-text-faint">{reason}</div>
+  );
+}
+
+/**
+ * Fix round (coordinator review, finding 4): the tab strip and its content used to live
+ * entirely inside `response && response.kind === 'success'`, so a Pre-request script that
+ * threw before the request could even be resolved (making `sendRequest` refuse to send at
+ * all, over an undefined `{{var}}`) left `response` untouched and NOTHING rendered here
+ * except the generic "Undefined variable" banner: the actual thrown error, and any
+ * `console.log` output that ran before the throw, were computed, stored, and completely
+ * unreachable in the UI. `showTabs` now depends on script output existing at all, not on
+ * the request having produced a successful response, so Test Results and Console stay
+ * reachable on every failure path: a missing variable, a rejected proxy call, or a normal
+ * success. Pretty/Raw/Headers still need a real response and say so plainly when there
+ * isn't one, instead of rendering an empty CodeMirror box.
+ */
 export function ResponsePanel(): React.JSX.Element {
   const response = useStore((s) => s.response);
   const sending = useStore((s) => s.sending);
   const mode = useStore((s) => s.ui.responseViewMode);
+  const testResults = useStore((s) => s.testResults);
+  const consoleLines = useStore((s) => s.consoleLines);
+
+  const hasScriptOutput = testResults.length > 0 || consoleLines.length > 0;
+  const showTabs = response?.kind === 'success' || hasScriptOutput;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <AttemptFeedback />
 
-      {!response && !sending && (
+      {!response && !hasScriptOutput && !sending && (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-gym-text-faint">
           Send a request to see the response here.
         </div>
       )}
       {sending && <div className="flex flex-1 items-center justify-center text-xs text-gym-text-faint">Sending.</div>}
 
-      {response && response.kind === 'error' && (
+      {!sending && response && response.kind === 'error' && (
         <div className="m-3 rounded-md border border-gym-red-dim bg-gym-red-dim/30 px-3 py-2 text-xs text-gym-red">{response.message}</div>
       )}
 
-      {response && response.kind === 'success' && (
+      {!sending && showTabs && (
         <>
-          <div className="flex shrink-0 items-center gap-3 px-3 pt-3">
-            <span className={`rounded px-2 py-0.5 font-mono text-xs font-bold ${STATUS_BAND_CLASSES[statusBand(response.status)]}`}>
-              {response.status} {statusText(response.status)}
-            </span>
-            <span className="font-mono text-xs text-gym-text-dim">{formatMs(response.timeMs)}</span>
-            <span className="font-mono text-xs text-gym-text-dim">{formatBytes(response.sizeBytes)}</span>
-          </div>
+          {response && response.kind === 'success' && (
+            <div className="flex shrink-0 items-center gap-3 px-3 pt-3">
+              <span className={`rounded px-2 py-0.5 font-mono text-xs font-bold ${STATUS_BAND_CLASSES[statusBand(response.status)]}`}>
+                {response.status} {statusText(response.status)}
+              </span>
+              <span className="font-mono text-xs text-gym-text-dim">{formatMs(response.timeMs)}</span>
+              <span className="font-mono text-xs text-gym-text-dim">{formatBytes(response.sizeBytes)}</span>
+            </div>
+          )}
           <ResponseTabs />
           <div className="min-h-0 flex-1 overflow-auto p-3">
-            {mode === 'headers' ? (
+            {mode === 'test-results' ? (
+              <TestResultsView />
+            ) : mode === 'console' ? (
+              <ConsoleView />
+            ) : !response || response.kind !== 'success' ? (
+              <NoResponseView
+                reason={
+                  response?.kind === 'error'
+                    ? 'No response body: the request failed before a response came back. See the error above, and check Test Results/Console for a Pre-request script failure.'
+                    : 'No response yet: the request was never sent. Check Test Results/Console for why.'
+                }
+              />
+            ) : mode === 'headers' ? (
               <table className="w-full border-collapse text-left text-xs">
                 <tbody>
                   {Object.entries(response.headers).map(([key, value]) => (
@@ -196,10 +239,6 @@ export function ResponsePanel(): React.JSX.Element {
                   ))}
                 </tbody>
               </table>
-            ) : mode === 'test-results' ? (
-              <TestResultsView />
-            ) : mode === 'console' ? (
-              <ConsoleView />
             ) : (
               <CodeMirrorBox
                 value={mode === 'pretty' ? tryPrettyJson(response.body).pretty : response.body}

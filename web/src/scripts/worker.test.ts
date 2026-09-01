@@ -35,6 +35,9 @@ interface FakeSelf {
   EventSource?: unknown;
   importScripts?: unknown;
   Worker?: unknown;
+  caches?: { open?: (name: string) => unknown };
+  indexedDB?: { open?: (name: string) => unknown };
+  WebTransport?: unknown;
   CryptoJS?: {
     HmacSHA256: (message: string, key: string) => { toString: () => string };
     SHA256: (message: string) => { toString: (enc?: unknown) => string };
@@ -51,7 +54,27 @@ interface WorkerResult {
   error: string | null;
 }
 
-function createHarness(): { self: FakeSelf; run: (script: string, context: unknown) => WorkerResult } {
+/** `beforeSource`, when given, runs INSIDE the vm context after `self` is seeded but
+ *  BEFORE the network-sandbox source runs, so a test can plant a fake prototype-chain
+ *  global (mimicking how Chromium exposes `fetch`/`importScripts`/`caches`/`indexedDB` via
+ *  the shared `WindowOrWorkerGlobalScope` mixin prototype, not as an own property of
+ *  `self`) and then prove `__pmNuke`'s chain walk actually reaches and replaces it there. */
+function createHarness(options?: { beforeSource?: string }): {
+  self: FakeSelf;
+  run: (script: string, context: unknown) => WorkerResult;
+  /** Runs `code` (which must assign a primitive to the global named `resultVar`) INSIDE
+   *  the vm context and returns that value. Needed for prototype-chain assertions
+   *  specifically: `node:vm`'s `createContext(sandbox)` does not make the `sandbox`
+   *  object reference itself BE the realm's internal global object (data property reads/
+   *  writes are proxied between the two, which is why `self.onmessage`/`self.CryptoJS`
+   *  set inside are readable as `sandbox.onmessage`/`sandbox.CryptoJS` outside), but
+   *  `Object.getPrototypeOf` on the OUTER `sandbox` reference does not reflect a
+   *  `Object.setPrototypeOf` applied to `self` from INSIDE the context, since that
+   *  mutated the internal global's own [[Prototype]] slot, a different object. Reading a
+   *  plain string result back out (a data property, which IS proxied correctly) sidesteps
+   *  that gap entirely. */
+  evalInContext: (code: string, resultVar: string) => string;
+} {
   const source = buildWorkerSource();
   const sandbox: FakeSelf = { console: {} };
   const context = vm.createContext(sandbox as unknown as Record<string, unknown>);
@@ -59,6 +82,7 @@ function createHarness(): { self: FakeSelf; run: (script: string, context: unkno
   // `self` global that way (rather than passing it as a parameter) matches how the
   // identifier resolves inside a real Worker, where `self` is not a parameter either.
   vm.runInContext('var self = this;', context);
+  if (options?.beforeSource) vm.runInContext(options.beforeSource, context);
   vm.runInContext(source, context);
 
   return {
@@ -72,6 +96,10 @@ function createHarness(): { self: FakeSelf; run: (script: string, context: unkno
       sandbox.onmessage({ data: { script, context: context2 } });
       if (!captured) throw new Error('worker source never called self.postMessage');
       return captured;
+    },
+    evalInContext(code: string, resultVar: string): string {
+      vm.runInContext(code, context);
+      return (sandbox as unknown as Record<string, unknown>)[resultVar] as string;
     },
   };
 }
@@ -261,6 +289,68 @@ describe('worker runtime source: network sandbox', () => {
     const { run } = createHarness();
     const result = run('new XMLHttpRequest();', baseContext);
     expect(result.error).toMatch(/"XMLHttpRequest" is not available/);
+  });
+
+  /**
+   * Fix round (coordinator review, finding 1): the exact escape the review proved against
+   * the real production string. `fetch`/`importScripts` are exposed via a shared mixin
+   * PROTOTYPE in real browsers (Chromium's `WindowOrWorkerGlobalScope`), not as an own
+   * property of `self`. An own-property shadow (`self.fetch = blocked()`, the pre-fix
+   * version of this file) leaves `Object.getPrototypeOf(self).fetch` pointing at the real
+   * implementation; calling it as `Object.getPrototypeOf(self).fetch.call(self, url)`
+   * re-binds `this` to `self` and reaches the network anyway. `beforeSource` plants a fake
+   * prototype object with `fetch`/`importScripts` on it (mimicking that mixin) BEFORE the
+   * network sandbox runs, so this test proves `__pmNuke`'s chain walk actually reaches and
+   * replaces the prototype-level property, not just `self`'s own one.
+   */
+  it('blocks fetch and importScripts even when they live on a prototype in the chain, not as an own property of self', () => {
+    const { evalInContext } = createHarness({
+      beforeSource:
+        'var __testProto = { ' +
+        'fetch: function () { return "REAL_FETCH_WAS_CALLED"; }, ' +
+        'importScripts: function () { return "REAL_IMPORTSCRIPTS_WAS_CALLED"; } ' +
+        '}; Object.setPrototypeOf(self, __testProto);',
+    });
+
+    const fetchOutcome = evalInContext(
+      'var __fetchOutcome; try { Object.getPrototypeOf(self).fetch.call(self, "http://example.com"); __fetchOutcome = "NOT_BLOCKED"; } catch (e) { __fetchOutcome = e.message; }',
+      '__fetchOutcome',
+    );
+    expect(fetchOutcome).toMatch(/"fetch" is not available/);
+
+    const importOutcome = evalInContext(
+      'var __importOutcome; try { Object.getPrototypeOf(self).importScripts.call(self, "http://example.com/x.js"); __importOutcome = "NOT_BLOCKED"; } catch (e) { __importOutcome = e.message; }',
+      '__importOutcome',
+    );
+    expect(importOutcome).toMatch(/"importScripts" is not available/);
+  });
+
+  it('caches (Cache Storage) is blocked: any property access throws, not just a specific method name', () => {
+    const { self } = createHarness();
+    expect(self.caches).toBeDefined();
+    expect(() => self.caches?.open?.('x')).toThrow(/"caches" is not available/);
+  });
+
+  it('indexedDB is blocked: any property access throws', () => {
+    const { self } = createHarness();
+    expect(self.indexedDB).toBeDefined();
+    expect(() => self.indexedDB?.open?.('x')).toThrow(/"indexedDB" is not available/);
+  });
+
+  it('WebTransport is blocked', () => {
+    const { run } = createHarness();
+    const result = run('new WebTransport("https://example.com");', baseContext);
+    expect(result.error).toMatch(/"WebTransport" is not available/);
+  });
+
+  it('navigator.sendBeacon is blocked even when it lives on navigator\'s own prototype, not on the navigator instance', () => {
+    const { self } = createHarness({
+      beforeSource:
+        'self.navigator = {}; var __navProto = { sendBeacon: function () { return "REAL_BEACON_WAS_CALLED"; } }; ' +
+        'Object.setPrototypeOf(self.navigator, __navProto);',
+    });
+    const navProto = Object.getPrototypeOf((self.navigator as object) ?? {}) as { sendBeacon: (...args: unknown[]) => unknown };
+    expect(() => navProto.sendBeacon.call(self.navigator, 'x', 'y')).toThrow(/"navigator.sendBeacon" is not available/);
   });
 });
 
