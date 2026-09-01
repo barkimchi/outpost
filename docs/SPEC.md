@@ -26,6 +26,23 @@ Train first, showcase second.
    If 4600 is ever occupied, use `PORT` and pick 4800, not 4700.)*
 2. **Listen on `0.0.0.0`.** Document `127.0.0.1` as the fallback base URL for
    IPv6-first resolution. Postman **desktop** only. The web client cannot reach localhost.
+2a. **Bind explicitly, and probe before binding.** Two related hazards, both root-caused
+   on this machine rather than theorized:
+   - **Tests must use `listen(0, '127.0.0.1')`, never bare `listen(0)`.** A bare
+     `listen(0)` binds the IPv6 wildcard `::` dual-stack, and macOS's ephemeral-port
+     allocator does not treat an existing **IPv4** wildcard listener as a conflict. It
+     will hand out a port that Spotify, Tailscale, or another concurrent test process is
+     already serving on IPv4. Since `fetch('http://127.0.0.1:P')` dials IPv4, the kernel
+     delivers the request to the FOREIGN listener. Observed symptoms were a 401 (another
+     test process's GitHub router holding a different World), a 501, a 404, and an
+     `HTTPParserError` on a non-HTTP payload. Binding `127.0.0.1` matches what `fetch`
+     dials and took a load repro from 6 failures in 160 runs to 180 out of 180 clean.
+   - **Production must fail fast rather than bind blind.** `listen(PORT, '0.0.0.0')`
+     succeeds even when something already holds `127.0.0.1:PORT`, and that squatter then
+     wins every localhost request while the server reports itself healthy. Probe
+     `127.0.0.1:PORT` at startup; if anything answers, exit with a message naming the port
+     and telling the user to set `PORT`. A silent half-bind is the single most expensive
+     failure mode this machine produces.
 3. **No real credentials, ever.** No network egress to real GitHub/Google/Glean/Slack.
    All tokens are generated fakes. No cloud, no telemetry.
 4. **Raw body is captured before JSON parsing.** Slack HMAC verification is over the
