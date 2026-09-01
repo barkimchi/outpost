@@ -261,5 +261,16 @@ export function createSlackRouter(): Router {
     res.json({ ok: true });
   });
 
+  // Fall-through for any /slack path or method this mock has no route registered for at
+  // all, registered last so it never shadows a real route above (fix round, finding 7).
+  // Slack's own idiom, per this file's header comment: HTTP 200 with the real result in
+  // the JSON body's `ok` field, not the trainer's generic
+  // `{"error":"Not Found","path":"..."}` (app.ts's catch-all, which would also be the
+  // wrong HTTP status entirely for this platform). A path typo is the commonest real
+  // mistake, and it used to teach the wrong shape.
+  router.use((_req, res) => {
+    res.json(slackError('unknown_method'));
+  });
+
   return router;
 }

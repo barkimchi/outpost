@@ -73,6 +73,26 @@ export function gleanInvalidRequest(detail: string): GleanProblemDetail {
   };
 }
 
+// UNVERIFIED SHAPE: approximated, same "ProblemDetail" envelope and reasoning as
+// gleanAuthenticationRequired()/gleanInvalidRequest() above (developers.glean.com/errors/
+// names the response format but did not render a full example body to this fetch). Fix
+// round, finding 7: an unmodeled path or method under `/glean` used to fall through to
+// the trainer's own generic `{"error":"Not Found","path":"..."}` envelope instead of this
+// platform's own idiom, teaching the wrong shape on the commonest real mistake, a path
+// typo. `not_found` is not one of the 23 stable `ProblemDetail.code` values the header
+// comment's source page confirmed by name, but the envelope shape itself (code/title/
+// status/detail) and the general convention of a machine-readable code paired with a
+// human title are; this mock's own reasonable completion for a case that page's excerpt
+// did not enumerate.
+export function gleanNotFound(detail: string): GleanProblemDetail {
+  return {
+    code: 'not_found',
+    title: 'Not Found',
+    status: 404,
+    detail,
+  };
+}
+
 // --- Search (docs/SPEC.md section 5: POST /rest/api/v1/search) -------------------------
 
 export interface GleanSearchResult {

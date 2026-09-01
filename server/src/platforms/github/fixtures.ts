@@ -109,6 +109,23 @@ export function problemsParsingJson(): { message: string; documentation_url: str
   };
 }
 
+// source: same live response as notFoundFixture() above (GET
+// https://api.github.com/repos/octocat/this-repo-does-not-exist-xyz, 2026-08-31), minus
+// that endpoint-specific documentation_url. Fix round, finding 7: an unmodeled path or
+// method under `/github` used to fall all the way through to the trainer's own generic
+// `{"error":"Not Found","path":"..."}` envelope (app.ts's catch-all), teaching the wrong
+// shape on the single commonest real mistake, a path typo. GitHub's real generic 404 body
+// is exactly `{message, documentation_url, status}`; the anchor here is the platform's
+// general REST docs (`https://docs.github.com/rest`), not any one endpoint's, since this
+// fires for a request this mock has no specific route for at all.
+export function unknownEndpoint(): GithubErrorBody {
+  return {
+    message: 'Not Found',
+    documentation_url: 'https://docs.github.com/rest',
+    status: '404',
+  };
+}
+
 // UNVERIFIED SHAPE: approximated. Added in the Task 3 second fix round for
 // `GET /notifications`, a second real, distinct scope-gated endpoint used by
 // `t2-missing-scope` so which scope goes missing genuinely varies (spec hard constraint

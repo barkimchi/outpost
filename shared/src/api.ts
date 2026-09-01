@@ -31,9 +31,20 @@ export type ScenarioPlatform = Platform | 'mixed';
 export type EngineLifecycleState = 'idle' | 'active' | 'explaining' | 'solved';
 
 /** `POST /_trainer/api/scenarios/:id/activate` and `POST /_trainer/api/scenarios/drill`
- *  response, and the `scenario:activated` SSE payload minus `type`/`ts`
- *  (`server/src/engine/engine.ts`'s `ActivatedPayload`). Reuses `events.ts`'s
- *  `ActivatedStepSummary` rather than redeclaring an identical `{id, title}` shape. */
+ *  response, and the `scenario:activated` SSE payload minus `type`/`ts`. Reuses
+ *  `events.ts`'s `ActivatedStepSummary` rather than redeclaring an identical
+ *  `{id, title}` shape.
+ *
+ *  Final-review fix round, finding 3: `server/src/engine/engine.ts` used to declare its
+ *  own, separately-maintained copy of this interface (and of `EnginePublicState` /
+ *  `StateStepSummary` below) instead of importing this one. The two had already drifted:
+ *  the server's copy carried `docsRef`, this one did not, so the server genuinely put
+ *  `docsRef` on the wire while the type the web client imports never declared it, and
+ *  `docsRef` became the eighth authored-but-unconsumed field in this build despite an
+ *  entire fix round dedicated to that exact defect (hard constraint 7b). THIS is now the
+ *  one definition; `engine.ts` imports it rather than redeclaring it. A duplicated type
+ *  that has drifted is worse than no shared type, because it looks like it is keeping
+ *  things honest. */
 export interface ActivatedPayload {
   seed: string;
   tier: Tier;
@@ -45,6 +56,11 @@ export interface ActivatedPayload {
   steps?: ActivatedStepSummary[];
   stepCount: number;
   drill: boolean;
+  /** `ScenarioDef.docsRef`: the doc id(s) this scenario actually needs, e.g. the
+   *  capstone's `['google-oauth', 'glean']`. Not identity-revealing (names doc TOPICS,
+   *  never a scenario id or fault), so it stays exposed in drill mode too, same as
+   *  `platform`/`tier`/`track`. */
+  docsRef: string[];
 }
 
 export interface StateStepSummary {
@@ -53,8 +69,8 @@ export interface StateStepSummary {
   done: boolean;
 }
 
-/** `GET /_trainer/api/state` response (`server/src/engine/engine.ts`'s
- *  `EnginePublicState`). */
+/** `GET /_trainer/api/state` response. See `ActivatedPayload` above for why this is the
+ *  one definition `engine.ts` imports, not a separately-maintained copy. */
 export interface EnginePublicState {
   state: EngineLifecycleState;
   scenarioId?: string;
@@ -71,9 +87,24 @@ export interface EnginePublicState {
   hintsUnlocked?: number;
   hintsRevealed?: number;
   solutionRevealed?: boolean;
+  /** `ScenarioDef.docsRef`, same field and same reasoning as `ActivatedPayload.docsRef`
+   *  above. */
+  docsRef?: string[];
   /** The scenario author's human nudge for the most recent attempt (`Step.attemptHint` in
    *  `shared/src/scenario.ts`), distinct from the mechanical `reason` on the
-   *  `scenario:attempt` SSE event. */
+   *  `scenario:attempt` SSE event.
+   *
+   *  Final-review fix round, finding 1 (CRITICAL): this used to be the CURRENT step's
+   *  `attemptHint` unconditionally, present the instant a scenario activated, before any
+   *  attempt of any kind. Spec section 8 is explicit that `attemptHint` is "shown when
+   *  match hits but assertions fail," which describes an EVENT (a real attempt), not a
+   *  static property of the step; the unconditional version handed over the whole
+   *  discovery for free at zero attempts, defeating the 3/6/9 hint gate entirely. Present
+   *  now only once a request has matched the CURRENT step and failed its assertions at
+   *  least once since that step became current (`server/src/engine/engine.ts`'s
+   *  `ActiveRun.currentStepAttemptFailed`, reset on activation and on every step
+   *  advance); an out-of-order match against a DIFFERENT step (fix round finding 2) never
+   *  sets it, since that is not "the current step's match hit." */
   attemptHint?: string;
 }
 

@@ -29,6 +29,26 @@ function isTrainerPath(pathLower: string): boolean {
   return pathLower === TRAINER_PREFIX || pathLower.startsWith(`${TRAINER_PREFIX}/`);
 }
 
+/**
+ * `web/dist` + the SPA shell (spec section 6 step 6, `app.ts`'s
+ * `express.static(webDistDir)` mount, prod only): `GET /` for `index.html`,
+ * `GET /index.html` if requested directly, and `GET /assets/*` for the built JS/CSS
+ * bundle (`web/dist/assets/index-<hash>.{js,css}`, see `vite.config.ts`'s default output
+ * layout). Skipped from the Logs tab for the same reason `/_trainer` is above (fix round,
+ * finding 6): this is the app serving its own shell to itself, never evidence of a
+ * learner's platform call, and no scenario matcher ever targets these paths (a platform
+ * base is always `/github`, `/google`, `/glean`, or `/slack`, never `/` or `/assets`).
+ * Before this fix, `npm start` logged a `GET /` and every `GET /assets/index-*.{js,css}`
+ * on first load and every refresh, each one badged `EXTERNAL`, exactly the same Logs-tab
+ * pollution `isTrainerPath` above was already fixed for once. Invisible under
+ * `npm run dev`, where Vite's own dev server (port 5173) serves these instead of this
+ * process ever seeing the request, which is why an earlier cleanup missed it. Matched
+ * against `pathLower`, same convention as `isTrainerPath`.
+ */
+function isStaticAssetPath(pathLower: string): boolean {
+  return pathLower === '/' || pathLower === '/index.html' || pathLower.startsWith('/assets/');
+}
+
 /** Marker header trainer/proxy.ts adds to its own outbound calls; see shared `source`. */
 const PROXY_MARKER_HEADER = 'x-postman-gym-proxy';
 
@@ -120,6 +140,19 @@ function alreadyEmitted(res: Response): boolean {
  * The event is built and emitted on `finish`, i.e. once the response has actually
  * completed, per spec ("requestLog wraps res.write/res.end; on finish builds a
  * RequestEvent").
+ *
+ * Accepted limitation (final-review fix round, finding 9, documented not fixed):
+ * `finish()` (below) is invoked from the patched `res.end`, which never runs at all if
+ * the client (or the proxy's own outbound `fetch`) aborts the connection before the
+ * platform handler calls `res.end()` itself. An aborted request therefore emits no
+ * `RequestEvent` at all, not even a partial one; it simply never reaches the Logs tab.
+ * Accepted rather than fixed: this project's platform mocks all respond synchronously
+ * and near-instantly (no real network hop, no slow upstream to time out on), so a
+ * genuine mid-flight abort is not a realistic condition a learner will hit in normal
+ * use, and reacting to Express's own `req`/`res` `'close'`/`'aborted'` events to emit a
+ * best-effort partial `RequestEvent` (with `status`/`resBody` necessarily missing or
+ * fabricated) would add real complexity for a case this project's own traffic shape
+ * does not produce.
  */
 export function requestLog(req: Request, res: Response, next: NextFunction): void {
   // Capture method/path/query and derive pathLower NOW, before next(): once the request
@@ -135,7 +168,7 @@ export function requestLog(req: Request, res: Response, next: NextFunction): voi
   const capturedPath = req.path;
   const capturedPathLower = toPathLower(capturedPath);
 
-  if (isTrainerPath(capturedPathLower)) {
+  if (isTrainerPath(capturedPathLower) || isStaticAssetPath(capturedPathLower)) {
     next();
     return;
   }
@@ -281,7 +314,7 @@ export function requestLog(req: Request, res: Response, next: NextFunction): voi
  */
 export function emitBodyParserFailureEvent(req: Request, res: Response, resBodyJson: string): void {
   const pathLower = toPathLower(req.path);
-  if (isTrainerPath(pathLower)) return;
+  if (isTrainerPath(pathLower) || isStaticAssetPath(pathLower)) return;
 
   if (alreadyEmitted(res)) return;
 

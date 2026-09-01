@@ -13,6 +13,7 @@ import {
   problemsParsingJson,
   rateLimitExceeded,
   resourceNotAccessible,
+  unknownEndpoint,
 } from './fixtures.js';
 
 /**
@@ -406,6 +407,15 @@ export function createGithubRouter(): Router {
       res.json([]);
     })
     .all((_req, res) => methodNotAllowed(res));
+
+  // Fall-through for any /github path this mock has no route registered for at all (a
+  // typo, an unimplemented endpoint), registered last so it never shadows a real route
+  // above (fix round, finding 7). GitHub's own real 404 envelope, not the trainer's
+  // generic `{"error":"Not Found","path":"..."}` (app.ts's catch-all): a path typo is the
+  // commonest real mistake, and it used to teach the wrong shape.
+  router.use((_req, res) => {
+    res.status(404).json(unknownEndpoint());
+  });
 
   return router;
 }

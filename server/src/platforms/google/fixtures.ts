@@ -82,6 +82,24 @@ export function unauthenticatedError(): GoogleApiError {
   };
 }
 
+// UNVERIFIED SHAPE: approximated, same envelope and reasoning as unauthenticatedError()
+// above (https://cloud.google.com/apis/design/errors#error_model: code/message/status).
+// "Requested entity was not found." is Google's own widely and consistently reported
+// generic NOT_FOUND wording across its REST APIs, not independently reproduced live here
+// (hard constraint 3). Fix round, finding 7: an unmodeled path or method under `/google`
+// used to fall through to the trainer's own generic `{"error":"Not Found","path":"..."}`
+// envelope instead of this platform's own idiom, teaching the wrong shape on the
+// commonest real mistake, a path typo.
+export function notFoundError(): GoogleApiError {
+  return {
+    error: {
+      code: 404,
+      message: 'Requested entity was not found.',
+      status: 'NOT_FOUND',
+    },
+  };
+}
+
 // UNVERIFIED SHAPE: approximated, same reasoning as unauthenticatedError() above. The
 // error-envelope shape (code/message/status/details[].reason) and the exact reason string
 // ACCESS_TOKEN_SCOPE_INSUFFICIENT are Google's own well-documented, stable convention for

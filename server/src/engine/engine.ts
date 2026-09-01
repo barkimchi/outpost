@@ -1,10 +1,12 @@
 import type {
-  ActivatedStepSummary,
+  ActivatedPayload,
   BuiltScenario,
+  EnginePublicState,
   Fault,
   RequestEvent,
   RunContext,
   ScenarioDef,
+  StateStepSummary,
   Step,
   TrainerEvent,
 } from '@gym/shared';
@@ -35,62 +37,15 @@ export class EngineError extends Error {
   }
 }
 
-export interface ActivatedPayload {
-  seed: string;
-  tier: 1 | 2 | 3 | 4 | 5 | 6;
-  track: 'troubleshoot' | 'implementation';
-  platform: 'github' | 'google' | 'glean' | 'slack' | 'mixed';
-  scenarioId?: string;
-  title?: string;
-  ticketMd: string;
-  steps?: ActivatedStepSummary[];
-  stepCount: number;
-  drill: boolean;
-  /**
-   * `ScenarioDef.docsRef` (Task 6 fix round: this was authored on every one of the 11
-   * registered scenarios since Task 3 but had zero consumers anywhere, not the activate
-   * payload, any trainer event, shared/src/api.ts, or web/src, making it exactly the
-   * "generated but never read" pattern hard constraint 7a's own commit warns against.
-   * Exposed here, not in `web/src` (out of scope this round, Task 5 is live there):
-   * a real API consumer, inspectable over HTTP today, is the fix within this round's
-   * reach; a future task's Docs tab is free to read the same field once it exists. Not
-   * identity-revealing (it names doc TOPICS, e.g. "google-oauth", not a scenario id or
-   * fault), so it is exposed in drill mode too, same as `platform`/`tier`/`track`. */
-  docsRef: string[];
-}
-
-export interface StateStepSummary {
-  id: string;
-  title?: string;
-  done: boolean;
-}
-
-export interface EnginePublicState {
-  state: EngineLifecycleState;
-  scenarioId?: string;
-  title?: string;
-  tier?: 1 | 2 | 3 | 4 | 5 | 6;
-  track?: 'troubleshoot' | 'implementation';
-  platform?: 'github' | 'google' | 'glean' | 'slack' | 'mixed';
-  drill?: boolean;
-  ticketMd?: string;
-  steps?: StateStepSummary[];
-  currentStepIndex?: number;
-  stepCount?: number;
-  attempts?: number;
-  hintsUnlocked?: number;
-  hintsRevealed?: number;
-  solutionRevealed?: boolean;
-  /** `ScenarioDef.docsRef`, same fix and same reasoning as `ActivatedPayload.docsRef`
-   *  above (Task 6 fix round). */
-  docsRef?: string[];
-  /** The CURRENT step's `Step.attemptHint` (fix round 2), spec section 8: "shown when
-   *  match hits but assertions fail." Present whenever a scenario is active and its
-   *  current step defines one, regardless of whether any attempt has happened yet or
-   *  whether this is a drill (the text is contextual troubleshooting guidance, not
-   *  identity-revealing, so drill mode does not hide it). */
-  attemptHint?: string;
-}
+// `ActivatedPayload`, `StateStepSummary`, and `EnginePublicState` are imported from
+// `@gym/shared` (`shared/src/api.ts`), not declared here. Final-review fix round, finding
+// 3: this file used to declare its own, separate copies of all three, and they had
+// already drifted from the shared ones the web client actually imports (this file's copy
+// carried `docsRef`, `shared/src/api.ts`'s did not), so the server put `docsRef` on the
+// wire while the type the web client imports never declared it existed. Two names for
+// "the same shape" that quietly stop being the same shape is worse than no shared type at
+// all, because it still typechecks clean on both sides. See `shared/src/api.ts`'s own
+// header comment on `ActivatedPayload` for the rest of this reasoning.
 
 export interface ScenarioListEntry {
   id: string;
@@ -115,6 +70,19 @@ interface ActiveRun {
   /** Every fault this run registered, by id (both kinds), so `clearFaults` can look one
    *  up regardless of kind (fix round 2). Populated once, at activation; never mutated. */
   faultsById: Map<string, Fault>;
+  /**
+   * Whether a request has matched the CURRENT step and failed at least one assertion
+   * since this step became current (final-review fix round, finding 1). Gates whether
+   * `getState()` may surface `attemptHint` at all: spec section 8 defines `attemptHint`
+   * as shown "when match hits but assertions fail," an EVENT, not a standing property of
+   * the step, so `/state` handing it over unconditionally (the pre-fix behavior) gave the
+   * whole discovery away for free at zero attempts. Set `true` only by a genuine
+   * current-step match+fail (`recordCurrentStepAttempt`); an out-of-order match against a
+   * DIFFERENT step (finding 2, `maybeRecordOutOfOrderAttempt`) never sets it, since that
+   * did not match the current step at all. Reset to `false` on activation and every time
+   * `completeStep()` advances to a new current step.
+   */
+  currentStepAttemptFailed: boolean;
 }
 
 type InterceptFault = Extract<Fault, { kind: 'intercept' }>;
@@ -254,6 +222,7 @@ export class Engine {
       hintsRevealed: 0,
       solutionRevealed: false,
       faultsById,
+      currentStepAttemptFailed: false,
     };
     this.state = 'active';
     this.bumpRuns(def.id);
@@ -345,7 +314,10 @@ export class Engine {
       hintsUnlocked: c.hintsUnlocked,
       hintsRevealed: c.hintsRevealed,
       solutionRevealed: c.solutionRevealed,
-      attemptHint: c.built.steps[c.stepIndex]?.attemptHint,
+      // Fix round finding 1 (CRITICAL): only once a request has genuinely matched the
+      // CURRENT step and failed an assertion, never unconditionally. See
+      // `ActiveRun.currentStepAttemptFailed`'s own doc comment for the full reasoning.
+      attemptHint: c.currentStepAttemptFailed ? c.built.steps[c.stepIndex]?.attemptHint : undefined,
     };
   }
 
@@ -409,17 +381,63 @@ export class Engine {
     return undefined;
   }
 
+  /**
+   * Final-review fix round, finding 2 (the highest-value structural fix): before this,
+   * only the CURRENT step's own matcher was ever consulted, so any reasonable but
+   * out-of-order action (posting before joining, refreshing before the first exchange, a
+   * step-3 request while still on step 1) was completely invisible to the engine: no
+   * attempt, no reason, no hint, no way to unlock one. This is the THIRD instance of "a
+   * wrong attempt registers as zero attempts" this build has shipped, and it sits exactly
+   * where the multi-step scenarios are, so a request that matches no step at all is still
+   * genuine browsing (ignored, same as before), but one that matches a DIFFERENT step now
+   * falls through to `maybeRecordOutOfOrderAttempt` below instead of being dropped
+   * silently.
+   */
   private observe(ev: RequestEvent): void {
     if (this.state !== 'active' || !this.current) return;
-    const step = this.current.built.steps[this.current.stepIndex];
+    const c = this.current;
+    const step = c.built.steps[c.stepIndex];
     if (!step) return;
-    if (!matchesRequest(step.match, toMatchable(ev))) return; // browsing does not count as an attempt
+    const matchable = toMatchable(ev);
+    if (!matchesRequest(step.match, matchable)) {
+      this.maybeRecordOutOfOrderAttempt(c, step, matchable);
+      return;
+    }
 
     const result = evaluateAssertions(step.assertions, ev, customAssertions);
     if (result.pass) {
       this.completeStep(step);
     } else {
-      this.recordAttempt(step, result.reason ?? 'assertion failed');
+      this.recordCurrentStepAttempt(step, result.reason ?? 'assertion failed');
+    }
+  }
+
+  /**
+   * Checks every OTHER step in this scenario (never the current one, already ruled out by
+   * the caller) for a match against a request that missed the current step. A hit means
+   * the learner did something that belongs to a different point in the scenario, real
+   * signal worth counting toward the attempt total and the 3/6/9 hint gate, not silence.
+   * The reason names the confusion directly ("that is step 3; you are on step 1"), the
+   * exact framing finding 2 calls for. Never advances `stepIndex`, never runs the OTHER
+   * step's assertions, and never completes anything: only the current step's own
+   * match+assertions can do that, in `observe()` above. A request matching no step at all
+   * (genuine browsing) still falls through with no attempt recorded.
+   */
+  private maybeRecordOutOfOrderAttempt(c: ActiveRun, currentStep: Step, matchable: MatchableRequest): void {
+    const currentIndex = c.stepIndex;
+    for (let i = 0; i < c.built.steps.length; i++) {
+      if (i === currentIndex) continue;
+      const other = c.built.steps[i];
+      if (other && matchesRequest(other.match, matchable)) {
+        const reason =
+          `That request is step ${i + 1} ("${other.title}"); you are currently on step ` +
+          `${currentIndex + 1} ("${currentStep.title}").`;
+        // Not a current-step match+fail (it matched a DIFFERENT step's matcher, not this
+        // one's), so no `attemptHint` and `currentStepAttemptFailed` stays untouched: see
+        // that field's own doc comment.
+        this.recordAttempt(currentStep, reason, undefined, false);
+        return;
+      }
     }
   }
 
@@ -431,6 +449,10 @@ export class Engine {
     const nextStepIndex = c.stepIndex + 1;
     this.emit({ type: 'scenario:step', ts: Date.now(), stepId: step.id, nextStepIndex });
     c.stepIndex = nextStepIndex;
+    // A new step is now current (or none is, once the scenario is fully complete): any
+    // matched-but-failed attempt recorded against the PREVIOUS current step no longer
+    // says anything about this one (fix round finding 1).
+    c.currentStepAttemptFailed = false;
     if (c.stepIndex >= c.built.steps.length) {
       this.state = 'explaining';
       this.emit({ type: 'scenario:explaining', ts: Date.now() });
@@ -453,9 +475,26 @@ export class Engine {
     fault.revert?.(activeWorld());
   }
 
-  private recordAttempt(step: Step, reason: string): void {
+  /** The CURRENT step's own match hit but an assertion failed: the case spec section 8
+   *  actually describes ("shown when match hits but assertions fail"). Carries the
+   *  step's `attemptHint` on the event and marks `currentStepAttemptFailed`, the one
+   *  thing that lets `getState()` surface that same hint later (fix round finding 1). */
+  private recordCurrentStepAttempt(step: Step, reason: string): void {
+    this.recordAttempt(step, reason, step.attemptHint, true);
+  }
+
+  /**
+   * Shared bookkeeping for both attempt kinds: a genuine current-step match+fail
+   * (`recordCurrentStepAttempt` above) and an out-of-order match against a different step
+   * (`maybeRecordOutOfOrderAttempt`, fix round finding 2). Both count toward `attempts`
+   * and the 3/6/9 hint gate identically; they differ only in `attemptHint` (never present
+   * on an out-of-order hit, since that request did not match the current step's own
+   * matcher) and in whether `currentStepAttemptFailed` gets set.
+   */
+  private recordAttempt(step: Step, reason: string, attemptHint: string | undefined, marksCurrentStepFailure: boolean): void {
     const c = this.mustCurrent();
     c.attempts += 1;
+    if (marksCurrentStepFailure) c.currentStepAttemptFailed = true;
     this.bumpAttempts(c.def.id);
     this.emit({
       type: 'scenario:attempt',
@@ -463,7 +502,7 @@ export class Engine {
       stepId: step.id,
       attempts: c.attempts,
       reason,
-      attemptHint: step.attemptHint,
+      attemptHint,
     });
     this.maybeUnlockHint(c);
   }

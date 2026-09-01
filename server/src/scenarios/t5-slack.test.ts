@@ -245,7 +245,7 @@ test('a POST to conversations.history (previously silent, 404) now registers as 
   }
 });
 
-test('t5-hmac-signature solved end to end: a wrong signature is a real attempt, a correctly computed one solves it', async () => {
+test('t5-hmac-signature solved end to end: works once, the secret rotates, the identical replay fails, the rotated secret comes from a hint (fix round, finding 8)', async () => {
   const engine = freshEngine();
   const { events, stop } = collectTrainerEvents();
   const app = buildRealPipelineApp();
@@ -254,33 +254,70 @@ test('t5-hmac-signature solved end to end: a wrong signature is a real attempt, 
     const activated = engine.activate('t5-hmac-signature');
     const signingSecret = extractLabeled(activated.ticketMd, 'Signing secret on file');
 
+    async function send(sig: string, ts: string, body: string) {
+      return fetch(`http://127.0.0.1:${port}/slack/webhook/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-slack-request-timestamp': ts, 'x-slack-signature': sig },
+        body,
+      });
+    }
+
     const ts = String(Math.floor(Date.now() / 1000));
     const body = JSON.stringify({ type: 'url_verification', challenge: 'abc123' });
 
-    const bad = await fetch(`http://127.0.0.1:${port}/slack/webhook/events`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-slack-request-timestamp': ts, 'x-slack-signature': 'v0=deadbeef' },
-      body,
-    });
+    // A wrong signature is a real attempt, not silence.
+    const bad = await send('v0=deadbeef', ts, body);
     assert.equal(bad.status, 401);
     await new Promise((resolve) => setTimeout(resolve, 20));
     const attemptEvent = events.find((e): e is Extract<TrainerEvent, { type: 'scenario:attempt' }> => e.type === 'scenario:attempt');
     assert.ok(attemptEvent, 'a rejected signature must be recorded as a scenario:attempt with a reason');
 
+    // Step 1: the disclosed secret genuinely, correctly works.
     const goodSig = computeSignature(signingSecret, ts, body);
-    const good = await fetch(`http://127.0.0.1:${port}/slack/webhook/events`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-slack-request-timestamp': ts, 'x-slack-signature': goodSig },
-      body,
-    });
+    const good = await send(goodSig, ts, body);
     assert.equal(good.status, 200);
     assert.deepEqual(await good.json(), { challenge: 'abc123' });
     await new Promise((resolve) => setTimeout(resolve, 20));
-
     assert.ok(events.some((e) => e.type === 'scenario:step' && e.stepId === 'step-1'));
+    assert.equal(engine.getState().currentStepIndex, 1, 'step 2 must now be current');
+
+    // Step 2: the byte-identical request that JUST worked is now rejected. The secret
+    // rotated the instant step 1 completed (clearFaults -> revert()), the same
+    // observable before/after t6-capstone.ts's own refresh-token revocation produces.
+    const replay = await send(goodSig, ts, body);
+    assert.equal(replay.status, 401, 'the exact same signature that just worked must now be rejected: the secret rotated');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(
+      events.some((e) => e.type === 'scenario:attempt' && e.stepId === 'step-2'),
+      'the stale replay must count as a real attempt on step 2, not silence',
+    );
+
+    // Drive attempts up to 6 to unlock the hint that reveals the rotated secret: real
+    // Slack has no API that returns a signing secret, so a hint is the only honest,
+    // attempt-gated channel for it (this file's header comment).
+    for (let i = 0; i < 4; i++) {
+      const wrongAgain = await send('v0=stillwrong', ts, body);
+      assert.equal(wrongAgain.status, 401);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(engine.getState().attempts, 6);
+
+    engine.hint(); // index 0
+    const secretHint = engine.hint(); // index 1
+    const rotatedSecret = /`([0-9a-f]{32})`/.exec(secretHint.text)?.[1];
+    if (!rotatedSecret) throw new Error(`could not find the rotated secret in hint text: ${secretHint.text}`);
+    assert.notEqual(rotatedSecret, signingSecret, 'the rotated secret must genuinely differ from the one on file');
+
+    const rotatedSig = computeSignature(rotatedSecret, ts, body);
+    const fixed = await send(rotatedSig, ts, body);
+    assert.equal(fixed.status, 200);
+    assert.deepEqual(await fixed.json(), { challenge: 'abc123' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.ok(events.some((e) => e.type === 'scenario:step' && e.stepId === 'step-2'));
     assert.ok(events.some((e) => e.type === 'scenario:explaining'));
 
-    engine.explain('No request ever carried a correctly computed signature.', 'Computed v0= correctly and resent.');
+    engine.explain('The secret rotated the instant the first request succeeded.', 'Recomputed against the current secret and resent.');
     assert.ok(events.some((e) => e.type === 'scenario:solved'));
   } finally {
     stop();

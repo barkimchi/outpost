@@ -350,7 +350,14 @@ test('impl-glean solved end to end: a genuinely NEW document, unfindable before 
 
 // --- impl-slack: full live-HTTP solve -------------------------------------------------------
 
-test('impl-slack solved end to end: join, post, full history pagination', async () => {
+test('impl-slack solved end to end: post first (joining only if genuinely needed), then the join step, then full history pagination', async () => {
+  // Fix round (final-review, finding 4): step order is now post-then-join (matching the
+  // ticket's own "get the bot posting" headline and t5-slack.ts's t5-envelope-trap
+  // precedent), not join-then-post. This channel's starting membership is randomized per
+  // run (engine/generate.ts's `isMember: rng.bool(0.5)`), so the first post genuinely
+  // succeeds outright in roughly half of all runs and needs a join first in the other
+  // half; this test exercises whichever branch this run actually drew, rather than
+  // assuming one.
   const engine = freshEngine();
   const { events, stop } = collectTrainerEvents();
   const app = buildRealPipelineApp();
@@ -360,21 +367,40 @@ test('impl-slack solved end to end: join, post, full history pagination', async 
     const botToken = extractLabeled(activated.ticketMd, 'Bot token');
     const channelId = extractLabeled(activated.ticketMd, 'Channel');
 
-    const joinRes = await fetch(`http://127.0.0.1:${port}/slack/api/conversations.join`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ channel: channelId }),
-    });
-    assert.equal(((await joinRes.json()) as { ok: boolean }).ok, true);
+    async function post(): Promise<{ ok: boolean }> {
+      const res = await fetch(`http://127.0.0.1:${port}/slack/api/chat.postMessage`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ channel: channelId, text: 'we are live' }),
+      });
+      return (await res.json()) as { ok: boolean };
+    }
+    async function join(): Promise<{ ok: boolean }> {
+      const res = await fetch(`http://127.0.0.1:${port}/slack/api/conversations.join`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ channel: channelId }),
+      });
+      return (await res.json()) as { ok: boolean };
+    }
+
+    let posted = await post();
+    if (!posted.ok) {
+      // Not a member yet this run: join (an out-of-order match against step 2 while step
+      // 1 is still current, engine.ts's fix-round finding 2, so it still genuinely joins
+      // the channel even though it does not complete step 2 yet), then repost.
+      const joinedEarly = await join();
+      assert.equal(joinedEarly.ok, true);
+      posted = await post();
+    }
+    assert.equal(posted.ok, true, 'the post must genuinely succeed once (if needed) the bot has joined');
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.ok(events.some((e) => e.type === 'scenario:step' && e.stepId === 'step-1'));
 
-    const postRes = await fetch(`http://127.0.0.1:${port}/slack/api/chat.postMessage`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ channel: channelId, text: 'we are live' }),
-    });
-    assert.equal(((await postRes.json()) as { ok: boolean }).ok, true);
+    // Step 2 (join) is now current regardless of which branch above ran; a fresh,
+    // in-order join call completes it (idempotent either way).
+    const joined = await join();
+    assert.equal(joined.ok, true);
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.ok(events.some((e) => e.type === 'scenario:step' && e.stepId === 'step-2'));
 

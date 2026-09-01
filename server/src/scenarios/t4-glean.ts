@@ -126,8 +126,8 @@ currently sends to \`POST /rest/api/v1/search\`:
 
     ${JSON.stringify(brokenBody)}
 
-Client API token on file: \`${ctx.glean.clientToken}\`
-Glean instance: \`${ctx.glean.instance}\`
+- Client API token on file: \`${ctx.glean.clientToken}\`
+- Glean instance: \`${ctx.glean.instance}\`
 
 Work out what the request body is missing, and get a search actually succeeding.
 `.trim();

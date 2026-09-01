@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import express, { Router } from 'express';
-import { requestLog, emitBodyParserFailureEvent } from './requestLog.js';
+import { requestLog, emitBodyParserFailureEvent, toPathLower } from './requestLog.js';
 import { bus } from '../bus.js';
-import { createApp } from '../app.js';
+import { createApp, type CreateAppOptions } from '../app.js';
 import { engine } from '../engine/engine.js';
 import type { RequestEvent } from '@gym/shared';
 
@@ -103,8 +106,22 @@ async function listen() {
  * each test file into its own process), and this file's other tests never touch it, so
  * booting it here cannot affect them.
  */
-async function listenRealApp() {
-  const app = createApp({ production: false });
+async function listenRealApp(options: Omit<CreateAppOptions, 'production'> = {}) {
+  const app = createApp({ production: false, ...options });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const { port } = server.address() as AddressInfo;
+  return { server, port };
+}
+
+/**
+ * Same as `listenRealApp()`, but in production mode with a real `webDistDir` on disk
+ * (`index.html` + `assets/index-<hash>.js`, the exact shape Vite actually builds), for the
+ * static-asset skip test below (fix round, finding 6): `createApp()` only mounts
+ * `express.static` when `production: true` (spec section 6 step 6, "prod only").
+ */
+async function listenRealAppProd(webDistDir: string) {
+  const app = createApp({ production: true, webDistDir });
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const { port } = server.address() as AddressInfo;
@@ -241,15 +258,59 @@ test('pathLower is lowercased with a trailing slash stripped, while path stays v
   }
 });
 
-test('root path normalizes to "/" in pathLower, not the empty string', async () => {
-  const { server, port } = await listen();
+// Fix round (finding 6): GET / is now a skipped static-asset path (see the test group
+// below), so this can no longer be observed through a live HTTP round trip the way it
+// used to be; toPathLower is exported specifically so this normalization stays directly
+// testable on its own.
+test('toPathLower normalizes the root path to "/", not the empty string', () => {
+  assert.equal(toPathLower('/'), '/');
+});
+
+// --- Static asset requests (web/dist + the SPA shell) are never logged (fix round, ------
+// finding 6) --------------------------------------------------------------------------
+
+test('GET / and GET /assets/* are never logged, even in production with a real build present', async () => {
+  const webDistDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-static-log-test-'));
+  fs.mkdirSync(path.join(webDistDir, 'assets'));
+  fs.writeFileSync(path.join(webDistDir, 'index.html'), '<!doctype html><title>gym</title>');
+  fs.writeFileSync(path.join(webDistDir, 'assets', 'index-abc123.js'), 'console.log("gym");');
+  const { server, port } = await listenRealAppProd(webDistDir);
   try {
-    const eventPromise = waitForNextRequestEvent();
-    await fetch(`http://127.0.0.1:${port}/`);
-    const ev = await eventPromise;
-    assert.equal(ev.pathLower, '/');
+    const events = await collectRequestEvents(async () => {
+      const root = await fetch(`http://127.0.0.1:${port}/`);
+      assert.equal(root.status, 200, 'sanity: the SPA shell must still actually be served');
+      const asset = await fetch(`http://127.0.0.1:${port}/assets/index-abc123.js`);
+      assert.equal(asset.status, 200, 'sanity: the built bundle must still actually be served');
+    });
+    assert.deepEqual(
+      events,
+      [],
+      'GET / and GET /assets/* must never produce a RequestEvent: this is the app serving its own shell to ' +
+        'itself, not a learner\'s platform call, and used to badge every page load/refresh EXTERNAL in the Logs tab',
+    );
   } finally {
     server.close();
+    fs.rmSync(webDistDir, { recursive: true, force: true });
+  }
+});
+
+test('a genuine platform request is still logged normally alongside a static asset skip', async () => {
+  // Regression guard: the static-asset skip must not accidentally swallow real platform
+  // traffic served by the SAME production app.
+  const webDistDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-static-log-test-'));
+  fs.writeFileSync(path.join(webDistDir, 'index.html'), '<!doctype html><title>gym</title>');
+  engine.boot();
+  const { server, port } = await listenRealAppProd(webDistDir);
+  try {
+    const events = await collectRequestEvents(async () => {
+      await fetch(`http://127.0.0.1:${port}/`);
+      await fetch(`http://127.0.0.1:${port}/github/user`);
+    });
+    assert.equal(events.length, 1, 'only the platform request should be logged');
+    assert.equal(events[0]?.path, '/github/user');
+  } finally {
+    server.close();
+    fs.rmSync(webDistDir, { recursive: true, force: true });
   }
 });
 

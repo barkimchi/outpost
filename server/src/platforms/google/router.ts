@@ -7,6 +7,7 @@ import {
   accessTokenScopeInsufficientError,
   calendarEventsBody,
   calendarListBody,
+  notFoundError,
   unauthenticatedError,
   userinfoBody,
 } from './fixtures.js';
@@ -99,6 +100,15 @@ export function createGoogleRouter(): Router {
       }
       res.json(calendarEventsBody(req.params.calendarId ?? 'primary'));
     });
+
+  // Fall-through for any /google path or method this mock has no route registered for at
+  // all, registered last so it never shadows a real route above (fix round, finding 7).
+  // Google's own real error envelope (code/message/status), not the trainer's generic
+  // `{"error":"Not Found","path":"..."}` (app.ts's catch-all): a path typo is the
+  // commonest real mistake, and it used to teach the wrong shape.
+  router.use((_req, res) => {
+    res.status(404).json(notFoundError());
+  });
 
   return router;
 }

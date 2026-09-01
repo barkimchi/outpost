@@ -190,15 +190,15 @@ finish, not just "looks fine after the first successful call." Complete consent,
 access genuinely works, and finish by getting one new company document indexed into
 Glean, confirmed and visible in the index status, not just attempted.
 
-Client ID: \`${ctx.google.clientId}\`
-Client secret: \`${ctx.google.clientSecret}\`
-Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
-${callbackUrlLines()}
+- Client ID: \`${ctx.google.clientId}\`
+- Client secret: \`${ctx.google.clientSecret}\`
+- Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
+- ${callbackUrlLines()}
 
-Glean instance: \`${ctx.glean.instance}\`
-Glean indexing token: \`${ctx.glean.indexingToken}\`
-Datasource: \`${ctx.glean.datasource}\`
-Document to index: \`${CONNECTION_HEALTH_DOC_ID}\` ("${docTitle}")
+- Glean instance: \`${ctx.glean.instance}\`
+- Glean indexing token: \`${ctx.glean.indexingToken}\`
+- Datasource: \`${ctx.glean.datasource}\`
+- Document to index: \`${CONNECTION_HEALTH_DOC_ID}\` ("${docTitle}")
 
 This integration has looked done before and turned out not to be. Confirm every piece of
 it actually still works before calling it finished.

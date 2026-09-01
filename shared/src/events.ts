@@ -58,6 +58,16 @@ export interface RequestEvent {
    * the platform routers directly). Dual-client parity is the point of this project, and
    * the Logs tab distinguishes the two. Set by requestLog from a marker header the proxy
    * adds to its own outbound calls; never present on genuinely external traffic.
+   *
+   * Accepted limitation (final-review fix round, finding 9, documented not fixed): this
+   * is spoofable. Any client, real Postman desktop included, can send the same marker
+   * header by hand and be badged `'proxy'` despite never having gone through the
+   * built-in proxy at all. Harmless: nothing in this project makes a trust or security
+   * decision based on `source`, it is purely a Logs tab display label ("did this come
+   * from the built-in UI or from outside"), and every credential in this project is
+   * already a generated fake (hard constraint 3), so there is nothing a spoofed badge
+   * could gain access to. Fixing it (an HMAC'd or otherwise unforgeable marker) would add
+   * real complexity for a cosmetic label with no security surface behind it.
    */
   source: 'proxy' | 'external';
 }

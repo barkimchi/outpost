@@ -8,6 +8,7 @@ import {
   gleanDocumentStatus,
   gleanIndexSuccess,
   gleanInvalidRequest,
+  gleanNotFound,
   gleanSearchResponse,
 } from './fixtures.js';
 
@@ -241,6 +242,15 @@ export function createGleanRouter(): Router {
     // designed to teach diagnosis is a cruel joke").
     const found = allSearchableDocs(world).find((d) => d.id === id && d.datasource === datasource);
     res.json(gleanDocumentStatus(id, datasource, found ? { title: found.title, indexedAt: found.indexedAt } : undefined));
+  });
+
+  // Fall-through for any /glean path or method this mock has no route registered for at
+  // all, registered last so it never shadows a real route above (fix round, finding 7).
+  // Glean's own ProblemDetail envelope, not the trainer's generic
+  // `{"error":"Not Found","path":"..."}` (app.ts's catch-all): a path typo is the
+  // commonest real mistake, and it used to teach the wrong shape.
+  router.use((_req, res) => {
+    res.status(404).json(gleanNotFound('No route matches this path and method.'));
   });
 
   return router;

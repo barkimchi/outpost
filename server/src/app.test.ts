@@ -88,12 +88,24 @@ test('platform prefixes are never swallowed by the SPA fallback, even once a bui
   await fs.writeFile(path.join(webDistDir, 'index.html'), '<!doctype html><title>gym</title>');
   const { server, port } = await listen(webDistDir);
   try {
-    for (const prefix of ['/github', '/google', '/glean', '/slack', '/_trainer']) {
+    // Every platform router now has its own fall-through for a path it has no route for
+    // at all (fix round, finding 7), answering in its own real idiom rather than the
+    // trainer's generic `{"error":"Not Found","path":"..."}`. Slack's own idiom is HTTP
+    // 200 with `{ok:false,...}` (this file's header comment, `platforms/slack/router.ts`),
+    // never a 4xx; every other platform's is a real 404 body. /_trainer has no such
+    // fall-through (out of finding 7's scope, a platform base) and still hits the
+    // trainer's own generic 404.
+    const expectedStatus: Record<string, number> = {
+      '/github': 404,
+      '/google': 404,
+      '/glean': 404,
+      '/slack': 200,
+      '/_trainer': 404,
+    };
+    for (const [prefix, status] of Object.entries(expectedStatus)) {
       const res = await fetch(`http://127.0.0.1:${port}${prefix}/anything`);
-      // No routers exist yet for the platform prefixes (Task 2), so these must fall
-      // through to the JSON 404, never to the SPA's index.html, even though index.html
-      // exists in this test.
-      assert.equal(res.status, 404, `${prefix} should not be swallowed by the SPA fallback`);
+      // Never the SPA's index.html either way, even though index.html exists in this test.
+      assert.equal(res.status, status, `${prefix} should not be swallowed by the SPA fallback`);
       const contentType = res.headers.get('content-type') ?? '';
       assert.ok(contentType.includes('application/json'), `${prefix} should return JSON, not HTML`);
     }

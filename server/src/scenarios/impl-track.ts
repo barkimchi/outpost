@@ -92,8 +92,8 @@ the environment and authentication the way the Docs tab describes, then prove th
 integration can actually see everything it needs to in the \`${ctx.github.org}\` org, not
 just whatever the first page happens to return.
 
-Personal access token: \`${ctx.github.validPat}\`
-Organization: \`${ctx.github.org}\`
+- Personal access token: \`${ctx.github.validPat}\`
+- Organization: \`${ctx.github.org}\`
 `.trim();
 
     return {
@@ -175,10 +175,10 @@ ${ctx.company.name} needs its Google OAuth 2.0 integration configured for the ve
 time. Set up the OAuth helper the way the Docs tab describes, run through consent, and
 confirm the resulting access actually works.
 
-Client ID: \`${ctx.google.clientId}\`
-Client secret: \`${ctx.google.clientSecret}\`
-Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
-${googleCallbackUrlLines()}
+- Client ID: \`${ctx.google.clientId}\`
+- Client secret: \`${ctx.google.clientSecret}\`
+- Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
+- ${googleCallbackUrlLines()}
 `.trim();
 
     return {
@@ -252,12 +252,12 @@ ${ctx.company.name} just published a new internal document and wants it connecte
 Glean for the first time. Index it under the company's own datasource, confirm the index
 actually picked it up, and confirm employees can find it through search.
 
-Glean instance: \`${ctx.glean.instance}\`
-Indexing token: \`${ctx.glean.indexingToken}\`
-Search token: \`${ctx.glean.clientToken}\`
-Datasource: \`${ctx.glean.datasource}\`
-Document: \`${NEW_DOC_ID}\` ("${docTitle}")
-Content: "${docBody}"
+- Glean instance: \`${ctx.glean.instance}\`
+- Indexing token: \`${ctx.glean.indexingToken}\`
+- Search token: \`${ctx.glean.clientToken}\`
+- Datasource: \`${ctx.glean.datasource}\`
+- Document: \`${NEW_DOC_ID}\` ("${docTitle}")
+- Content: "${docBody}"
 `.trim();
 
     return {
@@ -353,34 +353,47 @@ ${ctx.company.name} is going live on its Slack integration. Get the bot posting 
 #${channel.name} for the first time, and pull back that channel's complete message
 history.
 
-Bot token: \`${ctx.slack.botToken}\`
-Channel: \`${channel.id}\` (#${channel.name})
+- Bot token: \`${ctx.slack.botToken}\`
+- Channel: \`${channel.id}\` (#${channel.name})
 `.trim();
 
     return {
       ticketMd,
       setup: [],
       faults: [],
+      // Fix round (final-review, finding 4): step order used to be join-then-post, which
+      // contradicted the ticket's own headline ("get the bot posting"). A learner who
+      // reasonably tried posting first got matched against neither step's matcher at all
+      // (chat.postMessage was step 2's, not step 1's), so four straight posts registered
+      // zero attempts and 409'd the hint endpoint. `t5-slack.ts`'s t5-envelope-trap orders
+      // the same two actions post-then-join and grades correctly, so this now mirrors
+      // that: post first (matching the ticket's own framing; this channel's starting
+      // membership is randomized per run, `engine/generate.ts`'s `isMember: rng.bool(0.5)`,
+      // so roughly half of all runs succeed immediately and the other half get a real,
+      // correctly-counted `not_in_channel` attempt first), then join, which is always safe
+      // to call and always genuinely completes the step whether or not it was actually
+      // needed to unblock posting.
       steps: [
         {
           id: 'step-1',
-          title: 'Join the channel',
-          match: { method: 'POST', pathPattern: '^/slack/api/conversations\\.join$' },
-          assertions: [
-            { kind: 'status', equals: 200 },
-            { kind: 'jsonPath', path: 'ok', equals: true },
-          ],
-          attemptHint: 'Send { "channel": "..." } with the channel id from the ticket.',
-        },
-        {
-          id: 'step-2',
           title: 'Post the first message',
           match: { method: 'POST', pathPattern: '^/slack/api/chat\\.postmessage$' },
           assertions: [
             { kind: 'status', equals: 200 },
             { kind: 'jsonPath', path: 'ok', equals: true },
           ],
-          attemptHint: 'Slack answers every outcome with HTTP 200. Check the "ok" field, not only the status code, to confirm the post actually landed.',
+          attemptHint:
+            'Slack answers every outcome with HTTP 200. Check the "ok" field, not only the status code: if it says not_in_channel, join the channel with conversations.join before posting again.',
+        },
+        {
+          id: 'step-2',
+          title: 'Join the channel',
+          match: { method: 'POST', pathPattern: '^/slack/api/conversations\\.join$' },
+          assertions: [
+            { kind: 'status', equals: 200 },
+            { kind: 'jsonPath', path: 'ok', equals: true },
+          ],
+          attemptHint: 'Send { "channel": "..." } with the channel id from the ticket. Safe to call even if the bot already belongs.',
         },
         {
           id: 'step-3',
@@ -397,8 +410,8 @@ Channel: \`${channel.id}\` (#${channel.name})
         },
       ],
       hints: [
+        'A 200 status from any of these endpoints never means the call succeeded on its own. Check the "ok" field of the body first: "not_in_channel" means the bot has never joined that channel.',
         'conversations.join is safe to call even if the bot already belongs to the channel; it just reports a warning instead of failing.',
-        'A 200 status from any of these endpoints never means the call succeeded on its own. Check the "ok" field of the body first.',
         'Follow response_metadata.next_cursor as the cursor parameter, repeatedly, until has_more comes back false, to see the entire history.',
       ],
       solutionMd: `

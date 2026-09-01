@@ -77,10 +77,10 @@ const t3RedirectMismatch: ScenarioDef = {
 ${ctx.company.name}'s OAuth helper for Google keeps failing at the very first step: the
 redirect never lands anywhere useful.
 
-Client ID: \`${ctx.google.clientId}\`
-Client secret: \`${ctx.google.clientSecret}\`
-Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
-Callback URL configured in the OAuth helper: \`${wrongUri}\`
+- Client ID: \`${ctx.google.clientId}\`
+- Client secret: \`${ctx.google.clientSecret}\`
+- Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
+- Callback URL configured in the OAuth helper: \`${wrongUri}\`
 
 For reference, this app has exactly two redirect URIs registered with Google:
 \`${REGISTERED_URI_A}\` and \`${REGISTERED_URI_B}\`.
@@ -175,10 +175,10 @@ const t3TokenExpiry: ScenarioDef = {
 
 ${ctx.company.name}'s calendar sync integration is being connected for the first time.
 
-Client ID: \`${ctx.google.clientId}\`
-Client secret: \`${ctx.google.clientSecret}\`
-Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
-${callbackUrlLines()}
+- Client ID: \`${ctx.google.clientId}\`
+- Client secret: \`${ctx.google.clientSecret}\`
+- Scope: \`${BASELINE_GOOGLE_SCOPES.join(' ')}\`
+- ${callbackUrlLines()}
 
 Complete the consent flow and confirm access via userinfo. Access holds for a little
 while and then falls over on its own, with nothing else about the request or the
@@ -262,8 +262,8 @@ its credentials are on file:
 - Refresh token: \`${existingRefreshToken}\`
 - Client ID: \`${ctx.google.clientId}\`
 - Client secret: \`${ctx.google.clientSecret}\`
-${callbackUrlLines()}
-Scope: \`${scopes.join(' ')}\`
+- ${callbackUrlLines()}
+- Scope: \`${scopes.join(' ')}\`
 
 Ops ran a credential rotation sweep last week and this integration was never reconnected
 afterward. Confirm what's actually broken, then get it fully reconnected.
@@ -354,11 +354,11 @@ const t3InsufficientScope: ScenarioDef = {
 ${ctx.company.name}'s calendar sync integration calls Google's calendar list endpoint
 and gets back a 403 with \`ACCESS_TOKEN_SCOPE_INSUFFICIENT\`.
 
-Client ID: \`${ctx.google.clientId}\`
-Client secret: \`${ctx.google.clientSecret}\`
-${callbackUrlLines()}
-Currently issued access token: \`${existingAccessToken}\`
-Scope string the OAuth helper is currently configured to request: \`${currentScopeStr}\`
+- Client ID: \`${ctx.google.clientId}\`
+- Client secret: \`${ctx.google.clientSecret}\`
+- ${callbackUrlLines()}
+- Currently issued access token: \`${existingAccessToken}\`
+- Scope string the OAuth helper is currently configured to request: \`${currentScopeStr}\`
 
 Work out what's missing and get the calendar list call succeeding.
 `.trim();

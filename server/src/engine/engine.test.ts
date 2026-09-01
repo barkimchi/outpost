@@ -474,8 +474,15 @@ test('docsRef passes through from ScenarioDef to both the activate payload and g
 
 // --- Fix round 2, Important #1: attemptHint is authored on every step but was reachable
 // nowhere (no event field, getState() omitted it). ---------------------------------------
+//
+// Final-review fix round, finding 1 (CRITICAL): getState() used to hand over the CURRENT
+// step's attemptHint unconditionally, present the instant a scenario activated, before
+// any attempt of any kind -- the gym handing over the answer for free at zero attempts,
+// defeating the 3/6/9 hint gate entirely. Now gated on a genuine matched-but-failed
+// attempt against the CURRENT step having actually happened since that step became
+// current (`ActiveRun.currentStepAttemptFailed`).
 
-test('attemptHint reaches both the scenario:attempt event and getState(), distinct from the mechanical reason', async () => {
+test('a fresh activation shows no attemptHint from getState() until a real matched-but-failed attempt happens; the SSE event always carries it', async () => {
   const engine = freshEngine();
   const events: TrainerEvent[] = [];
   const onTrainerEvent = (ev: TrainerEvent): void => {
@@ -487,8 +494,8 @@ test('attemptHint reaches both the scenario:attempt event and getState(), distin
     const beforeAnyAttempt = engine.getState();
     assert.equal(
       beforeAnyAttempt.attemptHint,
-      'Read the Allow header on the 405 response you already got.',
-      'attemptHint is available from getState() even before any attempt happens',
+      undefined,
+      'a fresh activation at any step must show NO hint text until a real matched-but-failed attempt (fix round finding 1)',
     );
 
     const app = buildRealPipelineApp();
@@ -502,11 +509,15 @@ test('attemptHint reaches both the scenario:attempt event and getState(), distin
       server.close();
     }
 
+    // The live SSE path was already correct before this fix round and still is: the
+    // event fires exactly when a real attempt happens, so it always carries the hint.
     const attemptEvent = events.find((e): e is Extract<TrainerEvent, { type: 'scenario:attempt' }> => e.type === 'scenario:attempt');
     assert.ok(attemptEvent, 'expected a scenario:attempt event');
     assert.equal(attemptEvent.attemptHint, 'Read the Allow header on the 405 response you already got.');
     assert.notEqual(attemptEvent.reason, attemptEvent.attemptHint, 'reason (mechanical) and attemptHint (human) are distinct fields');
 
+    // Now that a genuine matched-but-failed attempt has happened on the current step,
+    // /state may surface the same hint too.
     const afterAttempt = engine.getState();
     assert.equal(afterAttempt.attemptHint, 'Read the Allow header on the 405 response you already got.');
   } finally {
@@ -539,6 +550,133 @@ test('getState().attemptHint is undefined for a step that defines none', () => {
     engine.activate('fake-no-hint');
     assert.equal(engine.getState().attemptHint, undefined);
   } finally {
+    engine.dispose();
+  }
+});
+
+/** Two real steps against the already-mounted `/github` router (`buildRealPipelineApp()`
+ *  in this file), each with its own distinct `attemptHint`, used by the two tests below
+ *  (final-review fix round, findings 1 and 2). */
+function fakeTwoStepDef(): ScenarioDef {
+  return {
+    id: 'fake-two-step',
+    tier: 1,
+    track: 'troubleshoot',
+    title: 'fake two-step',
+    platform: 'github',
+    docsRef: [],
+    build(_ctx: RunContext) {
+      return {
+        ticketMd: 'x',
+        setup: [],
+        faults: [],
+        steps: [
+          {
+            id: 'step-1',
+            title: 'Authenticate',
+            match: { method: 'GET', pathPattern: '^/github/user$' },
+            assertions: [{ kind: 'status', equals: 200 }],
+            attemptHint: 'step-1 hint',
+          },
+          {
+            id: 'step-2',
+            title: 'List repos',
+            match: { method: 'GET', pathPattern: '^/github/user/repos$' },
+            assertions: [{ kind: 'status', equals: 200 }],
+            attemptHint: 'step-2 hint',
+          },
+        ],
+        hints: [],
+        solutionMd: 'x',
+      };
+    },
+  };
+}
+
+test("attemptHint resets when the step advances: a step-1 failure never leaks into step-2's hint eligibility (fix round finding 1)", async () => {
+  const engine = freshEngine([fakeTwoStepDef()]);
+  const app = buildRealPipelineApp();
+  const { server, port } = await listen(app);
+  try {
+    engine.activate('fake-two-step');
+
+    // A genuine step-1 failure (no Authorization header -> 401) sets currentStepAttemptFailed.
+    await fetch(`http://127.0.0.1:${port}/github/user`);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(engine.getState().attemptHint, 'step-1 hint');
+
+    // Complete step 1 for real with a genuinely valid token.
+    const world = activeWorld();
+    const validToken = Object.keys(world.github.tokens).find((t) => world.github.tokens[t]?.valid);
+    if (!validToken) throw new Error('sanity: expected at least one valid github token this run');
+    await fetch(`http://127.0.0.1:${port}/github/user`, { headers: { authorization: `token ${validToken}` } });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(engine.getState().currentStepIndex, 1, 'sanity: step 2 must now be current');
+
+    // Step 2 is now current; its own attemptHint must NOT be visible yet, even though
+    // step 1 had a genuine failure moments ago: the flag is per-step, reset on every
+    // advance, in completeStep().
+    assert.equal(
+      engine.getState().attemptHint,
+      undefined,
+      "a step-1 failure must not leak into step-2's hint eligibility",
+    );
+
+    // A genuine step-2 failure now sets it, for step 2's own hint.
+    await fetch(`http://127.0.0.1:${port}/github/user/repos`);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(engine.getState().attemptHint, 'step-2 hint');
+  } finally {
+    server.close();
+    engine.dispose();
+  }
+});
+
+test('a request matching a LATER step while an EARLIER one is current is a real out-of-order attempt: counts, names the confusion, never advances (fix round finding 2)', async () => {
+  const engine = freshEngine([fakeTwoStepDef()]);
+  const events: TrainerEvent[] = [];
+  const onTrainerEvent = (ev: TrainerEvent): void => {
+    events.push(ev);
+  };
+  bus.on('trainer-event', onTrainerEvent);
+  const app = buildRealPipelineApp();
+  const { server, port } = await listen(app);
+  try {
+    engine.activate('fake-two-step');
+    assert.equal(engine.getState().attempts, 0);
+
+    // Step 1 (auth) is current; hit step 2's endpoint instead, out of order.
+    const res = await fetch(`http://127.0.0.1:${port}/github/user/repos`, {
+      headers: { authorization: 'token whatever-does-not-matter' },
+    });
+    // The request itself still gets a real response from the healthy router (a genuine
+    // 401, since this token was never issued): the engine's bookkeeping never gates what
+    // the platform mock actually answers.
+    assert.equal(res.status, 401);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const state = engine.getState();
+    assert.equal(state.currentStepIndex, 0, 'an out-of-order match must never advance the step');
+    assert.equal(state.attempts, 1, 'an out-of-order match must still count toward the attempt total, so hints can unlock');
+    assert.equal(
+      state.attemptHint,
+      undefined,
+      "an out-of-order match did not match the CURRENT step, so it must not surface that step's attemptHint",
+    );
+
+    const attemptEvent = events.find((e): e is Extract<TrainerEvent, { type: 'scenario:attempt' }> => e.type === 'scenario:attempt');
+    assert.ok(attemptEvent, 'an out-of-order match must produce a real scenario:attempt, not silence');
+    assert.match(attemptEvent.reason, /step 2/, 'the reason must name the step the request actually matched');
+    assert.match(attemptEvent.reason, /step 1/, 'the reason must also name the step actually current');
+    assert.equal(attemptEvent.attemptHint, undefined, "an out-of-order attempt never carries the current step's attemptHint");
+
+    // A request matching NO step at all is still genuine browsing, not an attempt.
+    await fetch(`http://127.0.0.1:${port}/github/rate_limit`, { headers: { authorization: 'token whatever-does-not-matter' } });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(engine.getState().attempts, 1, 'a request matching no step at all must still be ignored entirely');
+  } finally {
+    bus.off('trainer-event', onTrainerEvent);
+    server.close();
     engine.dispose();
   }
 });
