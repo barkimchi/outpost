@@ -68,6 +68,16 @@ Train first, showcase second.
    repeated activations, (a) the concrete values differ and run 1's answer fails in run 2,
    AND (b) the position or identity of the correct answer varies. Part (b) is the one that
    is easy to pass by accident while still being broken.
+7c. **A ticket presents the symptom, never the mechanism or the fix.** Caught in
+   `t3-token-expiry`, whose ticket said the quiet part out loud: "15 second lifetime, use
+   the refresh token, do not start the whole consent flow over." Every value in that
+   scenario regenerated per run and it still taught nothing, because there was nothing
+   left to diagnose. A ticket is written the way a real support escalation arrives: here
+   is what the customer observed, here is the log line, here are the credentials on file.
+   It never names the failing mechanism, never prescribes the remedy, and never explains
+   why the thing broke. That belongs in `solutionMd`, revealed after the explain-back
+   gate. Same family as 7a: 7a stops the ANSWER being memorizable across runs, 7c stops it
+   being readable in the prompt.
 7b. **Every field in the scenario contract must have a PROVEN consumer.** This build has
    now shipped the same defect three separate times, each silent because the default value
    was empty or undefined so nothing ever failed:
