@@ -108,6 +108,14 @@ export interface ScenarioActivatedEvent {
   steps?: ActivatedStepSummary[];
   stepCount: number;
   drill: boolean;
+  /** `ScenarioDef.docsRef`, same field and reasoning as `api.ts`'s `ActivatedPayload.docsRef`
+   *  (this event's payload IS an `ActivatedPayload`, spread onto `{type, ts}` in
+   *  `server/src/engine/engine.ts`'s `activateDef()`). Fix round (coordinator follow-up):
+   *  this event declared no `docsRef` field even though the engine has spread the real
+   *  one onto the wire since the previous round, so a web consumer reading THIS type had
+   *  to widen it locally to read a field that was already there at runtime. Not
+   *  identity-revealing, so exposed in drill mode too, same as `platform`/`tier`/`track`. */
+  docsRef: string[];
 }
 
 /**

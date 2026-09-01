@@ -472,6 +472,57 @@ test('docsRef passes through from ScenarioDef to both the activate payload and g
   }
 });
 
+/**
+ * Coordinator follow-up (post final-review): `docsRef` reaching `activate()`'s RETURN
+ * VALUE and `getState()` (the test above) is not proof it reaches the live
+ * `scenario:activated` SSE event too -- that event is a SEPARATE emission
+ * (`bus.emit('trainer-event', ...)` inside `activateDef()`), and `shared/src/events.ts`'s
+ * `ScenarioActivatedEvent` type used to omit `docsRef` entirely even though the engine
+ * already spread the full, docsRef-bearing payload onto it at runtime. A web consumer
+ * reading that type had no way to know the field was really there, and had to widen the
+ * type locally to read it. Asserts the EMITTED payload directly, not merely that the type
+ * declares the field: a type can be corrected while the emit call silently stops sending
+ * it (or never did), and a test that only checks the type would never catch that, exactly
+ * the "field declared and never sent" defect this codebase has already shipped once.
+ */
+test('the scenario:activated bus event itself carries docsRef, matching the ScenarioDef, in both real and drill activation', async () => {
+  const engine = freshEngine();
+  const events: TrainerEvent[] = [];
+  const onTrainerEvent = (ev: TrainerEvent): void => {
+    events.push(ev);
+  };
+  bus.on('trainer-event', onTrainerEvent);
+  try {
+    const def = scenarioRegistry.find((d) => d.id === 't3-redirect-mismatch');
+    assert.ok(def, 'sanity: t3-redirect-mismatch must be registered');
+    engine.activate('t3-redirect-mismatch');
+
+    const activatedEvent = events.find(
+      (e): e is Extract<TrainerEvent, { type: 'scenario:activated' }> => e.type === 'scenario:activated',
+    );
+    assert.ok(activatedEvent, 'expected a scenario:activated event on the bus');
+    assert.deepEqual(
+      activatedEvent.docsRef,
+      def?.docsRef,
+      'the EMITTED scenario:activated payload must carry the same docsRef the ScenarioDef declares, not just the activate() return value',
+    );
+
+    events.length = 0;
+    engine.activateDrill(1);
+    const drillActivatedEvent = events.find(
+      (e): e is Extract<TrainerEvent, { type: 'scenario:activated' }> => e.type === 'scenario:activated',
+    );
+    assert.ok(drillActivatedEvent, 'expected a scenario:activated event for the drill activation too');
+    assert.ok(
+      Array.isArray(drillActivatedEvent.docsRef) && drillActivatedEvent.docsRef.length > 0,
+      'docsRef on the emitted event is NOT hidden by drill mode either',
+    );
+  } finally {
+    bus.off('trainer-event', onTrainerEvent);
+    engine.dispose();
+  }
+});
+
 // --- Fix round 2, Important #1: attemptHint is authored on every step but was reachable
 // nowhere (no event field, getState() omitted it). ---------------------------------------
 //
