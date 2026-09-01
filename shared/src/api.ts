@@ -153,17 +153,15 @@ export interface KeyValueRow {
   enabled: boolean;
 }
 
-export interface EnvironmentVariable {
-  id: string;
-  key: string;
-  value: string;
-  enabled: boolean;
-}
-
+/** Fix round (coordinator review, minor): `EnvironmentVariable` used to be a byte-for-byte
+ *  duplicate of `KeyValueRow` (same four fields, same types), authored separately for no
+ *  reason nothing in this codebase ever depended on: no file imported `EnvironmentVariable`
+ *  by name outside this one usage. An environment variable row is a key/value row like any
+ *  other in this app (a header row, a form-body row); it does not need its own type. */
 export interface Environment {
   id: string;
   name: string;
-  variables: EnvironmentVariable[];
+  variables: KeyValueRow[];
 }
 
 export type AuthType = 'none' | 'bearer' | 'basic' | 'apikey' | 'oauth2';

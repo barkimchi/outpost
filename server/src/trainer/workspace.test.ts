@@ -106,3 +106,87 @@ test('PUT /_trainer/api/workspace rejects an obviously malformed payload with 40
     server.close();
   }
 });
+
+/**
+ * Fix round (coordinator review, finding 2): `Object.assign(current, incoming)` is a
+ * merge, not a replace: a key `incoming` omits survives from whatever `current` had.
+ * Every real client sends every key every time, which is exactly why this only surfaced
+ * from a deliberately partial payload, not from using the app. This test writes a real,
+ * non-default `activeEnvironmentId`, then PUTs a payload that passes structural
+ * validation but omits that key entirely, and asserts it does NOT survive.
+ */
+test('PUT /_trainer/api/workspace fully replaces: a key omitted from the payload does not survive from a previous PUT', async () => {
+  const { server, port } = await listen();
+  try {
+    const first: Workspace = defaultWorkspace();
+    first.activeEnvironmentId = 'e1';
+    first.environments = [{ id: 'e1', name: 'Local', variables: [] }];
+    const firstPut = await fetch(`http://127.0.0.1:${port}/_trainer/api/workspace`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(first),
+    });
+    assert.equal(firstPut.status, 200);
+
+    // Structurally valid (satisfies isValidWorkspacePayload) but deliberately omits
+    // activeEnvironmentId, simulating a partial/buggy client rather than the real one.
+    const partial = {
+      version: 1,
+      collections: [],
+      environments: [],
+      notes: 'replaced, not merged',
+      draft: defaultWorkspace().draft,
+      ui: defaultWorkspace().ui,
+    };
+    const secondPut = await fetch(`http://127.0.0.1:${port}/_trainer/api/workspace`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(partial),
+    });
+    assert.equal(secondPut.status, 200);
+
+    const getRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/workspace`);
+    const body = (await getRes.json()) as Record<string, unknown>;
+    // A merge would have left activeEnvironmentId: 'e1' behind; a real replace does not.
+    assert.equal(body.activeEnvironmentId, undefined);
+    assert.equal(body.notes, 'replaced, not merged');
+  } finally {
+    server.close();
+  }
+});
+
+/**
+ * Fix round (coordinator review, finding 3): `version` used to be accepted unchecked, so
+ * `PUT` with `version: 99` was stored and echoed back as 99. This server has only ever
+ * understood version 1; anything else is rejected outright, and rejection must not touch
+ * whatever was already stored.
+ */
+test('PUT /_trainer/api/workspace rejects an unsupported version with 400 and leaves the stored workspace untouched', async () => {
+  const { server, port } = await listen();
+  try {
+    const good: Workspace = defaultWorkspace();
+    good.notes = 'before the bad version attempt';
+    const goodPut = await fetch(`http://127.0.0.1:${port}/_trainer/api/workspace`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(good),
+    });
+    assert.equal(goodPut.status, 200);
+
+    const bad: Record<string, unknown> = { ...defaultWorkspace(), version: 99 };
+    const badPut = await fetch(`http://127.0.0.1:${port}/_trainer/api/workspace`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(bad),
+    });
+    assert.equal(badPut.status, 400);
+    const badBody = (await badPut.json()) as { error: string };
+    assert.equal(badBody.error, 'Bad Request');
+
+    const getRes = await fetch(`http://127.0.0.1:${port}/_trainer/api/workspace`);
+    const stored = (await getRes.json()) as Workspace;
+    assert.equal(stored.notes, 'before the bad version attempt');
+  } finally {
+    server.close();
+  }
+});

@@ -71,4 +71,13 @@ export const trainerApi = {
 
   putWorkspace: (workspace: Workspace): Promise<{ ok: true }> =>
     request('/_trainer/api/workspace', { method: 'PUT', body: JSON.stringify(workspace) }),
+
+  /** `DELETE /_trainer/api/progress` (`server/src/trainer/router.ts`): permanently wipes
+   *  every scenario's solve history AND explain-back writeups. The server requires the
+   *  literal confirmation phrase in the body or it refuses with 400 and changes nothing;
+   *  this method always sends it, because the UI-level confirmation (a typed match, see
+   *  `ResetProgressControl.tsx`) is what stands between a learner and this call, not a
+   *  second prompt here. */
+  resetProgress: (): Promise<{ ok: true }> =>
+    request('/_trainer/api/progress', { method: 'DELETE', body: JSON.stringify({ confirm: 'RESET PROGRESS' }) }),
 };

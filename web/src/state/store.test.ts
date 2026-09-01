@@ -20,6 +20,7 @@ vi.mock('../api/client.js', () => ({
     putWorkspace: vi.fn(),
     listDocs: vi.fn(),
     getDoc: vi.fn(),
+    resetProgress: vi.fn(),
   },
 }));
 
@@ -51,6 +52,7 @@ const mocked = trainerApi as unknown as {
   putWorkspace: ReturnType<typeof vi.fn>;
   listDocs: ReturnType<typeof vi.fn>;
   getDoc: ReturnType<typeof vi.fn>;
+  resetProgress: ReturnType<typeof vi.fn>;
 };
 
 const mockedRunScript = runScript as ReturnType<typeof vi.fn>;
@@ -302,6 +304,31 @@ describe('store: REST-driven actions', () => {
       'Compare X-OAuth-Scopes to X-Accepted-OAuth-Scopes on the failing response.',
     );
     expect(useStore.getState().scenario.lastAttempt).toBeUndefined(); // no reason available from state alone
+  });
+
+  /** `ResetProgressControl.tsx`'s store action (fix round, item 1). */
+  it('resetAllProgress calls the confirm-token DELETE, refreshes scenarios, and resolves true', async () => {
+    mocked.resetProgress.mockResolvedValue({ ok: true });
+    mocked.listScenarios.mockResolvedValue([{ id: 't1-wrong-method', tier: 1, track: 'troubleshoot', title: 'Wrong method', platform: 'github', solved: false, runs: 0 }]);
+
+    const ok = await useStore.getState().resetAllProgress();
+
+    expect(ok).toBe(true);
+    expect(mocked.resetProgress).toHaveBeenCalledOnce();
+    expect(mocked.listScenarios).toHaveBeenCalledOnce();
+    expect(useStore.getState().scenarios).toEqual([{ id: 't1-wrong-method', tier: 1, track: 'troubleshoot', title: 'Wrong method', platform: 'github', solved: false, runs: 0 }]);
+    expect(useStore.getState().errorMessage).toBeNull();
+  });
+
+  it('resetAllProgress resolves false and sets errorMessage on failure, without touching scenarios', async () => {
+    mocked.resetProgress.mockRejectedValue(new TrainerApiError(400, { error: 'Bad Request', message: 'nothing was changed' }, 'nothing was changed'));
+    useStore.setState({ scenarios: [] });
+
+    const ok = await useStore.getState().resetAllProgress();
+
+    expect(ok).toBe(false);
+    expect(mocked.listScenarios).not.toHaveBeenCalled();
+    expect(useStore.getState().errorMessage).toContain('nothing was changed');
   });
 });
 

@@ -5,6 +5,7 @@ import type { Collection, CollectionItem } from '@gym/shared';
 import { useStore } from '../../state/store.js';
 import { methodColor } from '../../lib/methodColors.js';
 import { EnvEditor } from './EnvEditor.js';
+import { ResetProgressControl } from '../ResetProgressControl.js';
 
 /**
  * The collections sidebar (docs/SPEC.md section 13/4): create/rename/delete folders and
@@ -328,6 +329,7 @@ export function Sidebar(): React.JSX.Element {
           <CollectionBlock key={c.id} collection={c} />
         ))}
       </div>
+      <ResetProgressControl />
     </div>
   );
 }

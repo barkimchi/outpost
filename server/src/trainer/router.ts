@@ -61,13 +61,25 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Light structural validation, the same convention `proxy.ts`'s own body checks use: just
- *  enough to reject obviously-wrong input with a clear 400 rather than corrupting the
- *  on-disk workspace or crashing on a `PUT` from a hand-written or buggy client. Not a full
- *  deep schema validator; the one client that calls this (`web/src/state/store.ts`'s
- *  `buildWorkspaceSnapshot`) always sends the complete, correctly-shaped object. */
+/**
+ * Light structural validation, the same convention `proxy.ts`'s own body checks use: just
+ * enough to reject obviously-wrong input with a clear 400 rather than corrupting the
+ * on-disk workspace or crashing on a `PUT` from a hand-written or buggy client. Not a full
+ * deep schema validator; the one client that calls this (`web/src/state/store.ts`'s
+ * `buildWorkspaceSnapshot`) always sends the complete, correctly-shaped object.
+ *
+ * Fix round (coordinator review, finding 3): `version` used to be accepted unchecked, so
+ * `PUT` with `version: 99` was stored and echoed back as 99, which is not what a version
+ * field on the wire is for. `Workspace.version` (`shared/src/api.ts`) is the TypeScript
+ * literal type `1`, meaning every well-typed caller can only ever construct a `1`; this is
+ * the runtime half of that contract, for the one caller TypeScript cannot police: a raw
+ * HTTP body. There is only ever one version this server has understood, so "validate" here
+ * means "reject anything else" rather than "migrate", since there is nothing yet to
+ * migrate from.
+ */
 function isValidWorkspacePayload(body: unknown): body is Workspace {
   if (!isPlainObject(body)) return false;
+  if (body.version !== 1) return false;
   if (!Array.isArray(body.collections)) return false;
   if (!Array.isArray(body.environments)) return false;
   if (typeof body.notes !== 'string') return false;
@@ -205,11 +217,18 @@ export function createTrainerRouter(): Router {
       return;
     }
     const incoming = req.body;
-    // Full replace, expressed as a mutation because JsonStore's API is mutate-in-place
-    // (`update(mutate)`, no `set`): the client always sends the complete workspace object
-    // (`web/src/state/store.ts`'s `buildWorkspaceSnapshot`), so overwriting every key here
-    // is equivalent to a real replace, not a partial merge.
+    // Fix round (coordinator review, finding 2): `Object.assign(current, incoming)` is a
+    // MERGE, not a replace, no matter what this comment used to claim: it overwrites keys
+    // `incoming` has, but a key `current` has and `incoming` omits survives untouched.
+    // Every real client (`web/src/state/store.ts`'s `buildWorkspaceSnapshot`) does send
+    // every key every time, which is exactly why this was never caught by using the app,
+    // only by a reviewer sending a deliberately partial payload. A genuine full replace,
+    // expressed as a mutation because JsonStore's API is mutate-in-place (`update(mutate)`,
+    // no `set`): clear every existing own key first, so nothing from the old value can
+    // survive, then copy every key `incoming` has.
     workspaceStore.update((current) => {
+      const mutable = current as unknown as Record<string, unknown>;
+      for (const key of Object.keys(mutable)) delete mutable[key];
       Object.assign(current, incoming);
     });
     res.json({ ok: true });

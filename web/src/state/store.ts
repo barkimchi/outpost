@@ -163,6 +163,12 @@ export interface StoreState {
   requestHint: () => Promise<void>;
   revealSolution: () => Promise<void>;
   explain: (rootCause: string, customerReply: string) => Promise<boolean>;
+  /** `DELETE /_trainer/api/progress`, from `ResetProgressControl.tsx`'s explicit,
+   *  typed-confirmation modal. Wipes every scenario's solve history and explain-back
+   *  writeups; refreshes `scenarios` afterward so solved checkmarks clear immediately,
+   *  without waiting for a reload. Returns whether it succeeded, same convention as
+   *  `explain`, so the modal can show an inline error instead of just closing on failure. */
+  resetAllProgress: () => Promise<boolean>;
 
   // --- Request builder ------------------------------------------------------------------
   setMethod: (method: string) => void;
@@ -661,6 +667,21 @@ export const useStore = create<StoreState>((set, get) => {
         return true;
       } catch (err) {
         set({ errorMessage: messageFromError(err) });
+        return false;
+      }
+    },
+
+    async resetAllProgress() {
+      try {
+        await trainerApi.resetProgress();
+        // Solved checkmarks and run counts on the scenario picker are sourced from
+        // data/progress.json; refresh right away so the wipe is visibly reflected without
+        // needing a reload.
+        await get().loadScenarios();
+        set({ errorMessage: null });
+        return true;
+      } catch (err) {
+        set({ errorMessage: `Could not reset progress: ${messageFromError(err)}` });
         return false;
       }
     },
