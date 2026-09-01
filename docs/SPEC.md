@@ -146,10 +146,33 @@ Mount order is load-bearing. Any reordering is a defect.
                     + express.urlencoded({ extended:true, verify: same })
                     + express.text({ type:['text/*','application/xml'], ... })
 2. requestLog       wraps res.write/res.end; on finish builds a RequestEvent
-                    { id, ts, method, path, query, reqHeaders (redacted values kept,
-                      this is a training tool, secrets are fake), reqBody (utf8, capped 8KB),
-                      status, resHeaders, resBody (capped 8KB), durationMs, platform }
+                    { id, ts, method, path, pathLower, query, reqHeaders (redacted values
+                      kept, this is a training tool, secrets are fake), reqBody (utf8,
+                      capped 8KB), status, resHeaders, resBody (capped 8KB), durationMs,
+                      platform, source: 'proxy' | 'external' }
                     -> bus.emit('request', ev)
+
+                    method/path/query are captured BEFORE routing. Express rewrites
+                    req.path inside a mounted router when the handler responds without
+                    calling next(), which silently truncates the logged path.
+
+                    `path` is verbatim, for display in the Logs tab: it is evidence the
+                    learner reads and must show what was actually sent. `pathLower` is
+                    lowercased with any trailing slash stripped (except root). THE ENGINE
+                    MATCHES ON `pathLower`, never on `path`. Express routes
+                    case-insensitively, so `GET /GitHub/user` returns a real 200 from the
+                    mock; matching on the verbatim path would make that request invisible
+                    to the engine, which is the silent-scenario-failure mode. Platform
+                    derivation and the skip list below use `pathLower` for the same reason.
+
+                    Body-parser failures (malformed JSON, 413) must ALSO emit a
+                    RequestEvent, from the error handler, built from the pre-routing
+                    capture. rawBody mounts above requestLog, so a parser error otherwise
+                    jumps straight to the error handler and the learner gets a correct 400
+                    with total engine silence, violating hard constraint 9. Malformed
+                    bodies are a first-class lesson here (see `t4-malformed-body`), so that
+                    path must be observable. Guard `finish()` against re-entry so the error
+                    path cannot double-emit and double-count an attempt.
 3. faultInjector    if engine has an active intercept fault matching this request,
                     short-circuit with its verbatim body. State faults are NOT here.
 4. /_trainer        trainer router (SSE excluded from any compression)
