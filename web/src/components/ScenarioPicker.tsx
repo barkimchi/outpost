@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { useStore } from '../state/store.js';
-import { useOutsideClick } from '../lib/useOutsideClick.js';
+import { MenuPopover } from './MenuPopover.js';
 import type { ScenarioListEntry } from '../types.js';
 
 const TIER_LABEL: Record<number, string> = {
@@ -54,8 +54,6 @@ export function ScenarioPicker(): React.JSX.Element {
   const loadScenarios = useStore((s) => s.loadScenarios);
   const activateScenario = useStore((s) => s.activateScenario);
 
-  useOutsideClick(rootRef, open, () => setOpen(false));
-
   const { byTier, impl } = useMemo(() => {
     const troubleshoot = scenarios.filter((s) => s.track === 'troubleshoot');
     const implementation = scenarios.filter((s) => s.track === 'implementation');
@@ -90,7 +88,7 @@ export function ScenarioPicker(): React.JSX.Element {
   }
 
   return (
-    <div className="relative" ref={rootRef}>
+    <div ref={rootRef}>
       <button
         type="button"
         onClick={toggle}
@@ -100,8 +98,7 @@ export function ScenarioPicker(): React.JSX.Element {
         <span className="max-w-[200px] truncate">{label}</span>
         <ChevronDown size={13} className="text-gym-text-faint" />
       </button>
-      {open && (
-        <div className="absolute left-0 top-[calc(100%+6px)] z-30 max-h-[70vh] w-80 overflow-y-auto rounded-lg border border-gym-border bg-gym-panel2 p-1.5 shadow-popover">
+      <MenuPopover anchorRef={rootRef} open={open} onClose={() => setOpen(false)} align="left" className="w-80 p-1.5">
           {scenarios.length === 0 && <p className="px-2 py-3 text-xs text-gym-text-faint">No scenarios registered yet.</p>}
           {[...byTier.entries()]
             .sort((a, b) => a[0] - b[0])
@@ -123,8 +120,7 @@ export function ScenarioPicker(): React.JSX.Element {
               ))}
             </div>
           )}
-        </div>
-      )}
+      </MenuPopover>
     </div>
   );
 }

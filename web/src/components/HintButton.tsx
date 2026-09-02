@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Lightbulb } from 'lucide-react';
 import { useStore } from '../state/store.js';
-import { useOutsideClick } from '../lib/useOutsideClick.js';
+import { MenuPopover } from './MenuPopover.js';
 
 /** Reveals hints one at a time (docs/SPEC.md section 9: unlock at 3/6/9 attempts). A dot
  *  marks an unrevealed hint waiting to be claimed; clicking claims it and opens the
@@ -12,8 +12,6 @@ export function HintButton(): React.JSX.Element {
   const scenario = useStore((s) => s.scenario);
   const requestHint = useStore((s) => s.requestHint);
 
-  useOutsideClick(rootRef, open, () => setOpen(false));
-
   const hasUnclaimed = scenario.hintsRevealed < scenario.hintsUnlocked;
   const disabled = scenario.state === 'idle' || scenario.hintsUnlocked === 0;
 
@@ -23,7 +21,7 @@ export function HintButton(): React.JSX.Element {
   }
 
   return (
-    <div className="relative" ref={rootRef}>
+    <div ref={rootRef}>
       <button
         type="button"
         disabled={disabled}
@@ -39,8 +37,13 @@ export function HintButton(): React.JSX.Element {
         Hint
         {hasUnclaimed && !disabled && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-gym-accent" />}
       </button>
-      {open && scenario.hints.length > 0 && (
-        <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-72 rounded-lg border border-gym-border bg-gym-panel2 p-3 shadow-popover">
+      <MenuPopover
+        anchorRef={rootRef}
+        open={open && scenario.hints.length > 0}
+        onClose={() => setOpen(false)}
+        align="right"
+        className="w-72 p-3"
+      >
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gym-text-faint">Hints</p>
           <ol className="space-y-2.5">
             {scenario.hints
@@ -53,8 +56,7 @@ export function HintButton(): React.JSX.Element {
                 </li>
               ))}
           </ol>
-        </div>
-      )}
+      </MenuPopover>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { ChevronDown, Shuffle } from 'lucide-react';
 import { useStore } from '../state/store.js';
-import { useOutsideClick } from '../lib/useOutsideClick.js';
+import { MenuPopover } from './MenuPopover.js';
 
 const TIERS = [1, 2, 3, 4, 5, 6];
 
@@ -13,15 +13,13 @@ export function DrillMenu(): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const activateDrill = useStore((s) => s.activateDrill);
 
-  useOutsideClick(rootRef, open, () => setOpen(false));
-
   function pick(tier?: number): void {
     void activateDrill(tier);
     setOpen(false);
   }
 
   return (
-    <div className="relative" ref={rootRef}>
+    <div ref={rootRef}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -31,8 +29,7 @@ export function DrillMenu(): React.JSX.Element {
         Drill
         <ChevronDown size={11} className="text-gym-text-faint" />
       </button>
-      {open && (
-        <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-40 rounded-lg border border-gym-border bg-gym-panel2 p-1.5 shadow-popover">
+      <MenuPopover anchorRef={rootRef} open={open} onClose={() => setOpen(false)} align="right" className="w-40 p-1.5">
           <button
             type="button"
             onClick={() => pick(undefined)}
@@ -51,8 +48,7 @@ export function DrillMenu(): React.JSX.Element {
               Tier {t}
             </button>
           ))}
-        </div>
-      )}
+      </MenuPopover>
     </div>
   );
 }
