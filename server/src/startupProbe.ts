@@ -23,7 +23,7 @@ export function assertPortAvailable(host: string, port: number): Promise<void> {
         reject(
           new Error(
             `Port ${port} is already being served on ${host} by another process. ` +
-              `postman-gym refuses to bind 0.0.0.0:${port} blind: it would succeed while that ` +
+              `outpost refuses to bind 0.0.0.0:${port} blind: it would succeed while that ` +
               `other process keeps winning every ${host} request, and this server would report ` +
               `itself healthy while actually being unreachable on localhost. ` +
               `Set PORT to a free port and try again.`,

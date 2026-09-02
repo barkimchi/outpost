@@ -1,8 +1,8 @@
-# Postman Gym: Implementation Plan
+# Outpost: Implementation Plan
 
 Spec: `docs/SPEC.md` (binding authority). Read the relevant spec sections before writing code.
 
-Repo root: `/Users/barkimchi/BarKimchiMain/02 Projects/Postman Gym` (its own git repo, branch `master`).
+Repo root: `/Users/barkimchi/BarKimchiMain/02 Projects/Outpost` (its own git repo, branch `master`).
 Note the space in the path: quote it in every shell command.
 
 ## Global Constraints
@@ -75,7 +75,7 @@ Create the workspace skeleton so every later task has somewhere to land.
 
 **Verify (run these, paste output):**
 ```bash
-cd "/Users/barkimchi/BarKimchiMain/02 Projects/Postman Gym"
+cd "/Users/barkimchi/BarKimchiMain/02 Projects/Outpost"
 npm install
 npm run typecheck
 npm run dev:server &   # or tsx server/src/index.ts

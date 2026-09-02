@@ -17,7 +17,7 @@ export interface PersistedUi {
   dividerPct: number;
 }
 
-const STORAGE_KEY = 'postman-gym:ui';
+const STORAGE_KEY = 'outpost:ui';
 
 export const DEFAULT_DIVIDER_PCT = 62; // matches spec section 13's "left column ~62%"
 

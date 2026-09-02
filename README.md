@@ -1,4 +1,4 @@
-# Postman Gym
+# Outpost
 
 A local training gym for enterprise API troubleshooting. One process, one port, four
 faithful mock platforms (GitHub REST, Google OAuth 2.0, Glean, Slack), and a built-in
@@ -6,7 +6,8 @@ Postman-like client. Every exercise can be solved from the built-in UI **or** fr
 Postman desktop, and both register identically, because detection is entirely
 server-side.
 
-Working name only. "Postman" is a trademark; rename before any public showcase.
+Named Outpost. Hookdeck ships an unrelated open-source webhooks tool of the same name;
+this project is unpublished, so the overlap is perceptual rather than legal.
 
 ## Run it
 

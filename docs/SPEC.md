@@ -1,7 +1,10 @@
-# Postman Gym: Technical Spec
+# Outpost: Technical Spec
 
 **Status:** binding authority. When the plan and this spec disagree, this spec wins.
-**Working name:** `postman-gym`. Postman is a trademark; rename before any public showcase.
+**Name:** Outpost (chosen 2026-09-01, replacing the working name `postman-gym`).
+Known collision, accepted knowingly: Hookdeck ships an open-source webhooks tool also
+called Outpost. This project is unpublished and not used in commerce, so the exposure is
+perceptual rather than legal. Revisit if it is ever released publicly.
 
 ## 1. Purpose
 
@@ -125,7 +128,7 @@ Train first, showcase second.
 ## 4. File tree
 
 ```
-postman-gym/
+outpost/
 ├── package.json                  # workspaces + root scripts
 ├── tsconfig.base.json
 ├── .gitignore                    # node_modules, dist, data/*.json, .superpowers/

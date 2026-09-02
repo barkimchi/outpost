@@ -5,7 +5,7 @@ import { trainerApi } from '../../api/client.js';
 import { Modal } from '../Modal.js';
 
 /** The shape `GET /_trainer/oauth/callback` posts (`server/src/trainer/oauthCallback.ts`):
- *  `{ source: 'postman-gym-oauth-callback', code, error, state }`, code/error/state each
+ *  `{ source: 'outpost-oauth-callback', code, error, state }`, code/error/state each
  *  either a string or `null`. Matched by `source` only, not by `event.origin`: the
  *  callback page posts with `window.location.origin` as its target origin (the TRAINER
  *  server's own origin, e.g. `http://localhost:4600`), which the browser only delivers to
@@ -26,14 +26,14 @@ import { Modal } from '../Modal.js';
  *  exact `event.origin` match is a deliberate, low-risk simplification, not a shortcut
  *  around anything that actually needs defending. */
 interface OAuthCallbackMessage {
-  source: 'postman-gym-oauth-callback';
+  source: 'outpost-oauth-callback';
   code: string | null;
   error: string | null;
   state: string | null;
 }
 
 function isOAuthCallbackMessage(data: unknown): data is OAuthCallbackMessage {
-  return typeof data === 'object' && data !== null && (data as { source?: unknown }).source === 'postman-gym-oauth-callback';
+  return typeof data === 'object' && data !== null && (data as { source?: unknown }).source === 'outpost-oauth-callback';
 }
 
 /**
@@ -145,7 +145,7 @@ export function OAuthModal({ onClose }: { onClose: () => void }): React.JSX.Elem
       state: crypto.randomUUID(),
     });
     const separator = authUrl.includes('?') ? '&' : '?';
-    window.open(`${authUrl}${separator}${qs.toString()}`, 'postman-gym-oauth', 'width=480,height=640');
+    window.open(`${authUrl}${separator}${qs.toString()}`, 'outpost-oauth', 'width=480,height=640');
   }
 
   function handleExchange(): void {

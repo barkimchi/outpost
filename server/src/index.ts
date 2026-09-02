@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   const app = createApp();
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`postman-gym listening on 0.0.0.0:${PORT} (also reachable at 127.0.0.1:${PORT})`);
+    console.log(`outpost listening on 0.0.0.0:${PORT} (also reachable at 127.0.0.1:${PORT})`);
   });
 }
 

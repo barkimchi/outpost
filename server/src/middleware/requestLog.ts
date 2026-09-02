@@ -50,7 +50,7 @@ function isStaticAssetPath(pathLower: string): boolean {
 }
 
 /** Marker header trainer/proxy.ts adds to its own outbound calls; see shared `source`. */
-const PROXY_MARKER_HEADER = 'x-postman-gym-proxy';
+const PROXY_MARKER_HEADER = 'x-outpost-proxy';
 
 const PLATFORM_PREFIXES = new Set<Platform>(['github', 'google', 'glean', 'slack']);
 

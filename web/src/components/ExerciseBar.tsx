@@ -125,7 +125,7 @@ export function ExerciseBar(): React.JSX.Element {
     <header className="flex h-12 shrink-0 items-center gap-3 overflow-x-auto border-b border-gym-border bg-gym-panel px-3 shadow-panel">
       <div className="flex shrink-0 items-center gap-1.5 pr-1">
         <span className="h-2 w-2 rounded-full bg-gym-accent" />
-        <span className="font-mono text-[11px] font-semibold tracking-[0.14em] text-gym-text-dim">POSTMAN GYM</span>
+        <span className="font-mono text-[11px] font-semibold tracking-[0.14em] text-gym-text-dim">OUTPOST</span>
       </div>
       <div className="h-5 w-px shrink-0 bg-gym-border" />
       <ScenarioPicker />

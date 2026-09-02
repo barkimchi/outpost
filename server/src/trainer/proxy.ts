@@ -84,7 +84,7 @@ export async function proxyHandler(req: Request, res: Response): Promise<void> {
 
   const forwardedHeaders: Record<string, string> = {
     ...(body.headers as Record<string, string> | undefined),
-    'x-postman-gym-proxy': '1',
+    'x-outpost-proxy': '1',
   };
 
   const start = process.hrtime.bigint();

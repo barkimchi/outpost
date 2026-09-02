@@ -158,12 +158,12 @@ test('source is "proxy" only when the internal marker header is present, and the
   try {
     const eventPromise = waitForNextRequestEvent();
     await fetch(`http://127.0.0.1:${port}/github/user`, {
-      headers: { 'x-postman-gym-proxy': '1' },
+      headers: { 'x-outpost-proxy': '1' },
     });
     const ev = await eventPromise;
     assert.equal(ev.source, 'proxy');
     assert.equal(
-      'x-postman-gym-proxy' in ev.reqHeaders,
+      'x-outpost-proxy' in ev.reqHeaders,
       false,
       'the internal marker header must not leak into the logged request headers',
     );

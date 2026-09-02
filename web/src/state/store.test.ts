@@ -400,7 +400,7 @@ describe('store: ui slice + persistence', () => {
   it('setDemoMode persists to localStorage and toggleDemoMode flips it', () => {
     useStore.getState().setDemoMode(true);
     expect(useStore.getState().ui.demoMode).toBe(true);
-    expect(JSON.parse(window.localStorage.getItem('postman-gym:ui') ?? '{}')).toMatchObject({ demoMode: true });
+    expect(JSON.parse(window.localStorage.getItem('outpost:ui') ?? '{}')).toMatchObject({ demoMode: true });
 
     useStore.getState().toggleDemoMode();
     expect(useStore.getState().ui.demoMode).toBe(false);

@@ -67,7 +67,7 @@ import cryptoJsSource from 'crypto-js/crypto-js.js?raw';
  *  claim that no other escape could ever exist. */
 const NETWORK_SANDBOX_SOURCE = `
 function __pmBlockedMessage(name) {
-  return '"' + name + '" is not available in a Postman Gym script: scripts run in a network-isolated worker (see the Scripting doc).';
+  return '"' + name + '" is not available in a Outpost script: scripts run in a network-isolated worker (see the Scripting doc).';
 }
 function __pmBlockedFn(name) {
   return function () { throw new Error(__pmBlockedMessage(name)); };

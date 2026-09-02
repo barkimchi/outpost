@@ -44,7 +44,7 @@ export function oauthCallbackHandler(req: Request, res: Response): void {
   const error = readQueryParam(req, 'error');
   const state = readQueryParam(req, 'state');
 
-  const payload = { source: 'postman-gym-oauth-callback', code: code ?? null, error: error ?? null, state: state ?? null };
+  const payload = { source: 'outpost-oauth-callback', code: code ?? null, error: error ?? null, state: state ?? null };
   // A postMessage payload embedded inside a <script> tag needs its own escaping pass on
   // top of JSON.stringify: JSON.stringify does not escape "<", so a code/error/state value
   // containing the literal text "</script>" would otherwise break out of the script block.
@@ -60,7 +60,7 @@ export function oauthCallbackHandler(req: Request, res: Response): void {
 
   const html = `<!doctype html>
 <html>
-<head><meta charset="utf-8"><title>Postman Gym OAuth callback</title></head>
+<head><meta charset="utf-8"><title>Outpost OAuth callback</title></head>
 <body>
 <p>${statusLine} You can close this window.</p>
 <script>
