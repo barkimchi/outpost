@@ -21,7 +21,7 @@
   /* A thin, dark scrollbar everywhere, instead of the OS default fighting the theme. */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #333b4f transparent;
+    scrollbar-color: #3f3b35 transparent;
   }
   *::-webkit-scrollbar {
     width: 9px;
@@ -31,12 +31,12 @@
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background-color: #2b3140;
+    background-color: #34312c;
     border-radius: 9999px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background-color: #3a4256;
+    background-color: #46423c;
   }
 }

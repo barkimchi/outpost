@@ -4,29 +4,32 @@ export default {
   theme: {
     extend: {
       colors: {
-        // A deliberate dark-editor palette, not Tailwind's default grays. `gym-*` so
+        // Flint: a warm-neutral dark ramp. Chroma climbs with lightness (C = 0.030 x L)
+        // at OKLCH hue 77, which is the accent's own hue, so the amber sits in the
+        // palette instead of opposing it. The previous ramp was Tailwind slate in all
+        // but name (hue 268, chroma up to 0.037) and read as generic dark SaaS. `gym-*` so
         // nothing here collides with the framework's own scale and every use is
         // unambiguous grep-able intent, not an accidental `bg-gray-800`.
         gym: {
-          bg: '#0a0c0f',
-          panel: '#111319',
-          panel2: '#151822',
-          panel3: '#1b1f2a',
-          border: '#242938',
-          'border-strong': '#333b4f',
-          text: '#e6e9f0',
-          'text-dim': '#98a1b3',
-          'text-faint': '#5c6478',
+          bg: '#0a0907',
+          panel: '#12110e',
+          panel2: '#191714',
+          panel3: '#211f1b',
+          border: '#2d2a25',
+          'border-strong': '#403c37',
+          text: '#f8ebd9',
+          'text-dim': '#a9a093',
+          'text-faint': '#706a61',
           accent: '#e0a12e',
           'accent-soft': '#f2c46b',
           'accent-dim': '#4a3a1c',
-          green: '#3fd68a',
+          green: '#4ecf8c',
           'green-dim': '#1c3f2d',
           blue: '#5aa2f7',
           'blue-dim': '#1c2e4a',
           amber: '#e0a12e',
           'amber-dim': '#4a3a1c',
-          red: '#f0616a',
+          red: '#ef6a68',
           'red-dim': '#4a2226',
           purple: '#b48af0',
         },

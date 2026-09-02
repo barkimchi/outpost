@@ -18,7 +18,7 @@ const darkTheme = EditorView.theme(
   {
     '&': {
       backgroundColor: 'transparent',
-      color: '#e6e9f0',
+      color: '#f8ebd9',
       fontSize: '12.5px',
       height: '100%',
     },
@@ -31,7 +31,7 @@ const darkTheme = EditorView.theme(
     '&.cm-focused': { outline: 'none' },
     '.cm-gutters': {
       backgroundColor: 'transparent',
-      color: '#5c6478',
+      color: '#706a61',
       border: 'none',
     },
     '.cm-activeLine': { backgroundColor: 'rgba(255,255,255,0.03)' },
@@ -40,13 +40,13 @@ const darkTheme = EditorView.theme(
     '&.cm-focused .cm-selectionBackground': { backgroundColor: 'rgba(224,161,46,0.28) !important' },
     '.cm-cursor': { borderLeftColor: '#e0a12e' },
     '.cm-matchingBracket': { backgroundColor: 'rgba(224,161,46,0.2)', outline: 'none' },
-    '.cm-foldGutter, .cm-lineNumbers': { color: '#5c6478' },
+    '.cm-foldGutter, .cm-lineNumbers': { color: '#706a61' },
     // {{var}} highlighting (docs/SPEC.md section 13: "highlighting in the URL, headers,
     // and body"). Same resolved/unresolved color convention as `VarHighlightInput.tsx`'s
     // URL-bar overlay: accent for a variable the active environment defines, red for one
     // that would silently send its own literal `{{name}}` text if sent as-is.
     '.cm-var-resolved': { backgroundColor: 'rgba(74,58,28,0.7)', color: '#f2c46b', borderRadius: '3px' },
-    '.cm-var-missing': { backgroundColor: 'rgba(74,34,38,0.7)', color: '#f0616a', borderRadius: '3px' },
+    '.cm-var-missing': { backgroundColor: 'rgba(74,34,38,0.7)', color: '#ef6a68', borderRadius: '3px' },
   },
   { dark: true },
 );
