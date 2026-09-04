@@ -7,7 +7,7 @@ import {
 
 /**
  * Tier 6: the capstone (docs/SPEC.md section 12, scenario 16). Task 8 brief: "the exercise
- * Bar screen-records for a recruiter, so it has to be the best-made thing in the project."
+ * built to be screen-recorded as a demo, so it has to be the best-made thing in the project."
  * Six graded steps, spanning Google OAuth and Glean:
  *
  *   1. Complete consent and exchange the code for an access/refresh pair, live (unlike
@@ -26,7 +26,7 @@ import {
  * Reviewed live and correctly called out: "the mid-flight revocation is not mid-flight in
  * any observable way. The token is dead from birth; nothing happens between steps 2 and 3."
  * A credential that never worked is not a turn, it is a trivia fact, and this is the
- * exercise Bar screen-records for a recruiter.
+ * exercise built to be screen-recorded.
  *
  * The fix is a genuine before/after over the SAME action: step 3 refreshes successfully
  * (a real 200, a real new access token, visible in the Logs tab); step 4 sends the
@@ -319,3 +319,4 @@ just an empty \`200\`.
 };
 
 export const t6Scenarios: ScenarioDef[] = [t6Capstone];
+
