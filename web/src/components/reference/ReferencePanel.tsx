@@ -13,8 +13,8 @@ import { NotesTab } from './NotesTab.js';
  *
  * Fix round (design): the plain single-tab layout, stretched to Demo mode's full ~1440px
  * with no prose measure anywhere, left roughly 60% of the screen as black void with
- * ragged, full-width ticket text. Demo mode is the capstone recording a viewer (a
- * recruiter) actually watches, so it gets a real second-column layout here rather than
+ * ragged, full-width ticket text. Demo mode is the capstone recording a viewer
+ * actually watches, so it gets a real second-column layout here rather than
  * the normal layout with the Postman column merely hidden: Ticket/Docs/Notes on the
  * left, capped at a readable measure, paired with a permanently-visible live Logs rail on
  * the right, exactly the "ticket + proof of the API call happening" pairing a viewer of
@@ -106,3 +106,4 @@ export function ReferencePanel(): React.JSX.Element {
     </div>
   );
 }
+
