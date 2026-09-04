@@ -138,8 +138,6 @@ search without handing over the fix.
 
 ## 9. Drill mode
 
-![Drill mode: a blind ticket with the scenario title, tier, and platform hidden](screenshots/13-drill-mode.png)
-
 Drill picks a random troubleshoot-track scenario (any tier, or a tier you choose) and hides
 its identity. The picker just says Drill, the ticket carries no tier or platform tag, and
 the step chips are anonymous. You solve it from the ticket and the logs alone, the way a
@@ -172,8 +170,6 @@ secret, scope, callback URL, and a Get New Access Token button.
 The modal opens the consent screen in a popup. If the popup is blocked, or you are running
 under `npm run dev` where the split origins cannot deliver the callback, the code can be
 pasted by hand instead.
-
-![The mock Google consent screen](screenshots/18-consent-popup.png)
 
 The consent screen is served by the Google mock. Two callback URLs are registered:
 `http://localhost:4600/_trainer/oauth/callback` for the built-in UI's popup, and
@@ -219,3 +215,4 @@ wipes solve history for every tier, and only after you type the exact confirmati
   capabilities removed along the whole prototype chain, not just shadowed.
 - **No real credentials, no real network calls.** Nothing here contacts GitHub, Google,
   Glean, or Slack.
+
