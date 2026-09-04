@@ -6,6 +6,11 @@ Postman-like client. Every exercise can be solved from the built-in UI **or** fr
 Postman desktop, and both register identically, because detection is entirely
 server-side.
 
+![Outpost after the first request: ticket on the right, request and response in the middle, collections on the left](docs/screenshots/05-first-send.png)
+
+A screenshot tour of a full session, from picking a scenario through the OAuth 2.0 helper,
+lives in [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md).
+
 ## Run it
 
 ```
