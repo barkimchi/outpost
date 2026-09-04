@@ -142,7 +142,7 @@ fix genuinely resolves it. **Prefer these.**
 breakage that no state mutation can produce.
 
 Fixtures are **byte-exact real error bodies** with a source-URL comment above each one, so they hold
-up to an interviewer spot-check. Dynamic values inside a fixture (usernames, scopes, timestamps,
+up to a side-by-side check against the real product. Dynamic values inside a fixture (usernames, scopes, timestamps,
 reset epochs) are interpolated from the run context; the envelope and wording stay verbatim.
 
 ---
@@ -263,7 +263,7 @@ idle -> activate(scenarioId)  # mints seed, resetState(), setup(), faults applie
 - Matching and all assertions pass: `scenario:step`, retire `clearFaults`, advance. Last step ->
   `explaining`.
 
-**Explain-back gate** (trains interview narration): before `solved`, the UI prompts for (1) root
+**Explain-back gate** (trains support-handoff narration): before `solved`, the UI prompts for (1) root
 cause in 2-3 sentences and (2) a short customer-facing reply. Both are stored in `progress.json`,
 then `solutionMd` is revealed side-by-side for self-comparison. Only after submission does the
 scenario finalize as solved. Works in Demo mode too (prompt renders in the reference panel).
@@ -316,8 +316,8 @@ recording the capstone: ticket, docs, live logs, notes, and progress chips all r
 Postman-originated traffic. Persists in `workspace.json`. Keyboard shortcut to flip.
 
 **Drill mode:** picks a random scenario from a chosen tier (or all), **hides the scenario title and
-fault identity**, presents only the ticket. Blind diagnosis, the closest rep to the real interview.
-Drill + Demo compose: blind ticket beside real Postman is the full interview simulation.
+fault identity**, presents only the ticket. Blind diagnosis, the closest rep to a cold escalation.
+Drill + Demo compose: blind ticket beside real Postman is the full cold-escalation simulation.
 
 **`</> Code` export:** cURL / Python `requests` / Node axios (learning path Stage 7.5).
 
@@ -342,7 +342,7 @@ malformed search body returns a 400 validation error, solved by reading the Docs
 **T5 Slack** — `not_in_channel` inside an HTTP **200** (the envelope trap) plus a cursor pagination
 step; webhook `v0=` HMAC signature failure with a timestamp replay guard (pre-request script rep).
 
-**T6 Capstone** (the recordable Ryan demo, 5 steps) — OAuth consent + exchange, prove access via
+**T6 Capstone** (the recordable demo, 5 steps) — OAuth consent + exchange, prove access via
 userinfo, server revokes the refresh token mid-flight, diagnose `invalid_grant` and re-auth,
 successful Glean indexing call. Progress chips lighting up while partly working in real Postman is
 the money shot.
@@ -381,3 +381,4 @@ Manual gates needing a human at the keyboard: real-Postman smoke tests in Phases
 ## 13. Out of scope for v1
 
 Timed mode, per-scenario stats, spaced repetition, inbound webhook inspector.
+
