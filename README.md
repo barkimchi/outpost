@@ -6,9 +6,6 @@ Postman-like client. Every exercise can be solved from the built-in UI **or** fr
 Postman desktop, and both register identically, because detection is entirely
 server-side.
 
-Named Outpost. Hookdeck ships an unrelated open-source webhooks tool of the same name;
-this project is unpublished, so the overlap is perceptual rather than legal.
-
 ## Run it
 
 ```
@@ -158,3 +155,8 @@ notes, or the request builder, and there is no undo. The server refuses the requ
 without an explicit `{"confirm": "RESET PROGRESS"}` body, and the button only sends that
 body once you have typed the exact phrase into a confirmation modal, not on a click;
 nothing else in this app calls this endpoint.
+
+## Name
+
+Named Outpost. Hookdeck ships an unrelated open-source webhooks tool of the same name;
+any overlap is perceptual rather than legal.
